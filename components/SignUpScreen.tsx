@@ -8,7 +8,10 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Alert,
 } from 'react-native';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../src/firebaseConfig';
 import { router } from 'expo-router';
 
 const SignUpScreen = () => {
@@ -20,16 +23,43 @@ const SignUpScreen = () => {
     phone: '',
     email: '',
     password: '',
+    confirmPassword: '',
   });
 
   const updateField = (key: string, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleCreateAccount = () => {
-    // TODO: Firebase create user logic
-    console.log('Creating account with:', form);
-    router.replace('/auth'); // or navigate elsewhere
+  const validatePassword = (password: string) => {
+    const hasUppercase = /[A-Z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    const isLongEnough = password.length >= 8;
+    return hasUppercase && hasNumber && isLongEnough;
+  };
+
+  const handleCreateAccount = async () => {
+    const { email, password, confirmPassword } = form;
+
+    if (password !== confirmPassword) {
+      Alert.alert('Error', 'Passwords do not match.');
+      return;
+    }
+
+    if (!validatePassword(password)) {
+      Alert.alert(
+        'Weak Password',
+        'Password must be at least 8 characters long and include at least one uppercase letter and one number.'
+      );
+      return;
+    }
+
+    try {
+      await createUserWithEmailAndPassword(auth, email, password);
+      Alert.alert('Account created!', 'You can now log in.');
+      router.replace('/auth');
+    } catch (error: any) {
+      Alert.alert('Signup Error', error.message);
+    }
   };
 
   return (
@@ -48,6 +78,7 @@ const SignUpScreen = () => {
           { label: 'Phone Number', key: 'phone', keyboardType: 'phone-pad' },
           { label: 'Email', key: 'email', keyboardType: 'email-address' },
           { label: 'Password', key: 'password', secure: true },
+          { label: 'Confirm Password', key: 'confirmPassword', secure: true },
         ].map(({ label, key, keyboardType, secure }) => (
           <View key={key} style={{ marginBottom: 16 }}>
             <Text style={styles.label}>{label}</Text>
