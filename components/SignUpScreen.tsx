@@ -11,7 +11,7 @@ import { router } from 'expo-router';
 
 export default function SignUpScreen() {
   const [form, setForm] = useState({
-    firstName: '', lastName: '', country: '', state: '', email: '', password: '', confirmPassword: '',
+    firstName: '', lastName: '', email: '', password: '', confirmPassword: '',
   });
   const [passValid, setPassValid] = useState(false);
   const [passMatch, setPassMatch] = useState(false);
@@ -63,20 +63,23 @@ export default function SignUpScreen() {
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <Text style={styles.title}>Create Your PlanPal Account</Text>
 
-        {['First Name', 'Last Name', 'Email'].map((label) => (
-          <View key={label} style={styles.fieldGroup}>
+        {[
+        { label: 'First Name', key: 'firstName' },
+        { label: 'Last Name', key: 'lastName' },
+        { label: 'Email', key: 'email' },
+        ].map(({ label, key }) => (
+        <View key={key} style={styles.fieldGroup}>
             <Text style={styles.label}>{label}</Text>
             <TextInput
-              value={(form as any)[label.replace(/ /g, '').toLowerCase()]}
-              onChangeText={(v) =>
-                updateField(label.replace(/ /g, '').toLowerCase(), v)}
-              placeholder={label}
-              placeholderTextColor="#888"
-              style={styles.input}
-              keyboardType={label === 'Email' ? 'email-address' : 'default'}
-              autoCapitalize={label === 'Email' ? 'none' : 'words'}
+            value={form[key as keyof typeof form]}  // <- This line is important for TypeScript
+            onChangeText={(v) => updateField(key, v)}
+            placeholder={label}
+            placeholderTextColor="#888"
+            style={styles.input}
+            keyboardType={key === 'email' ? 'email-address' : 'default'}
+            autoCapitalize={key === 'email' ? 'none' : 'words'}
             />
-          </View>
+        </View>
         ))}
 
         <View style={styles.fieldGroup}>
