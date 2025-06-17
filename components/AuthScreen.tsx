@@ -31,24 +31,28 @@ const AuthScreen = () => {
     clientId: 'YOUR_CLIENT_ID.apps.googleusercontent.com',
   });
 
-  useEffect(() => {
-    if (response?.type === 'success') {
-      const { id_token } = response.params;
-      const credential = GoogleAuthProvider.credential(id_token);
-      signInWithCredential(auth, credential).catch((e) => {
+useEffect(() => {
+  if (response?.type === 'success') {
+    const { id_token } = response.params;
+    const credential = GoogleAuthProvider.credential(id_token);
+    signInWithCredential(auth, credential)
+      .then(() => {
+        router.replace('/home'); // 👈 Redirect to tab after Google sign-in
+      })
+      .catch((e) => {
         Alert.alert('Google Sign-in failed', e.message);
       });
-    }
-  }, [response]);
+  }
+}, [response]);
 
-  const handleEmailLogin = async () => {
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      Alert.alert('Login successful!');
-    } catch (err: any) {
-      Alert.alert('Login failed', err.message);
-    }
-  };
+const handleEmailLogin = async () => {
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+    router.replace('/home'); // 👈 Redirect to tab after login
+  } catch (err: any) {
+    Alert.alert('Login failed', err.message);
+  }
+};
 
   return (
     <KeyboardAvoidingView
