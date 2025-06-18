@@ -102,6 +102,12 @@ const handleEmailLogin = async () => {
           />
           <Text style={styles.googleButtonText}>Continue with Google</Text>
         </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push('/forgot')} style={{ marginTop: 12 }}>
+          <Text style={{ color: '#4f8ef7', textAlign: 'center' }}>
+            Forgot Password?
+          </Text>
+        </TouchableOpacity>
+
 
         <TouchableOpacity onPress={() => router.push('/signup')} style={styles.signupLink}>
           <Text style={styles.signupText}>
