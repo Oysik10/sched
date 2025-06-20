@@ -8,10 +8,13 @@ import RNPickerSelect from 'react-native-picker-select';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../src/firebaseConfig';
 import { router } from 'expo-router';
+import { collection, query, where, getDocs, addDoc } from 'firebase/firestore';
+import { firestore } from '../src/firebaseConfig'; // this must be exported
+
 
 export default function SignUpScreen() {
   const [form, setForm] = useState({
-    firstName: '', lastName: '', email: '', password: '', confirmPassword: '',
+    firstName: '', lastName: '', email: '', password: '', confirmPassword: '', username: ''
   });
   const [passValid, setPassValid] = useState(false);
   const [passMatch, setPassMatch] = useState(false);
@@ -46,14 +49,41 @@ export default function SignUpScreen() {
       Alert.alert('Mismatch', 'Passwords do not match.');
       return;
     }
+    const usernameQuery = query(
+        collection(firestore, 'users'),
+        where('username', '==', form.username)
+      );
+      const querySnapshot = await getDocs(usernameQuery);
+
+      if (!form.username) {
+        Alert.alert('Missing Username', 'Please choose a username.');
+        return;
+      }
+
+      if (!querySnapshot.empty) {
+        Alert.alert('Username Taken', 'Please choose a different username.');
+        return;
+      }
+
     try {
-      await createUserWithEmailAndPassword(auth, form.email, form.password);
+      const userCredential = await createUserWithEmailAndPassword(auth, form.email, form.password);
+      const user = userCredential.user;
+
+      await addDoc(collection(firestore, 'users'), {
+        uid: user.uid,
+        email: form.email,
+        username: form.username,
+        firstName: form.firstName,
+        lastName: form.lastName,
+        createdAt: new Date(),
+      });
       Alert.alert('Account created!', 'You can now log in.');
       router.replace('/');
     } catch (e: any) {
       Alert.alert('Signup Error', e.message);
     }
   };
+  
 
   return (
     <KeyboardAvoidingView
@@ -81,6 +111,18 @@ export default function SignUpScreen() {
             />
         </View>
         ))}
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Username</Text>
+          <TextInput
+            value={form.username}
+            onChangeText={(v) => updateField('username', v)}
+            placeholder="Choose a unique username"
+            placeholderTextColor="#888"
+            style={styles.input}
+            autoCapitalize="none"
+          />
+        </View>
 
         <View style={styles.fieldGroup}>
           <Text style={styles.label}>Password</Text>
