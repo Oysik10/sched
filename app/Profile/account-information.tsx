@@ -25,8 +25,9 @@ import {
   query,
   where,
   getDocs,
+  deleteDoc,
 } from 'firebase/firestore';
-import { db } from '../../src/firebaseConfig'; // adjust path if needed
+import { db } from '../../src/firebaseConfig';
 import { router } from 'expo-router';
 
 const AccountInformation = () => {
@@ -42,16 +43,27 @@ const AccountInformation = () => {
 
   useEffect(() => {
     const loadUserData = async () => {
-      if (!user) return;
-      const userDoc = await getDoc(doc(db, 'users', user.uid));
-      if (userDoc.exists()) {
-        const data = userDoc.data();
-        console.log('User data:', data);
-
-        setName(`${data.firstName || ''} ${data.lastName || ''}`); // build name from real fields
-        setUsername(data.username || '');
-        setPhotoURL(data.photoURL || '');
+      if (!user) {
+        console.log('No authenticated user');
+        return;
       }
+
+      console.log('Auth UID:', user.uid);
+
+      const userDocRef = doc(db, 'users', user.uid);
+      const userDoc = await getDoc(userDocRef);
+
+      if (!userDoc.exists()) {
+        console.log(`No document found for user UID: ${user.uid}`);
+        return;
+      }
+
+      const data = userDoc.data();
+      console.log('Loaded Firestore user data:', data);
+
+      setName(`${data.firstName || ''} ${data.lastName || ''}`);
+      setUsername(data.username || '');
+      setPhotoURL(data.photoURL || '');
     };
 
     loadUserData();
@@ -128,9 +140,15 @@ const AccountInformation = () => {
         try {
           const cred = EmailAuthProvider.credential(user?.email!, password);
           await reauthenticateWithCredential(user!, cred);
+
+          // Delete Firestore user doc
+          await deleteDoc(doc(db, 'users', user.uid));
+
+          // Delete the Auth user
           await deleteUser(user!);
+
           Alert.alert('Deleted', 'Your account has been deleted.');
-          router.replace('../../'); // adjust this route if needed
+          router.replace('../..'); // adjust if your login route is different
         } catch (error: any) {
           Alert.alert('Error', error.message);
         }
@@ -158,7 +176,9 @@ const AccountInformation = () => {
           style={styles.avatar}
         />
         <View>
-          <Text style={styles.usernameText}>@{username || 'username'}</Text>
+          <Text style={styles.usernameText}>
+            @{username && username.trim() !== '' ? username : 'loading...'}
+          </Text>
           <TouchableOpacity onPress={pickImage}>
             <Text style={styles.changePhoto}>Change Photo</Text>
           </TouchableOpacity>
