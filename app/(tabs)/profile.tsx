@@ -6,10 +6,8 @@ import { router } from 'expo-router';
 const TABS = [
   { label: 'Account Information', route: '../Profile/account-information' },
   { label: 'Liked', route: '../Profile/liked' },
-  { label: 'Followers', route: '../Profile/followers' },
-  { label: 'Following', route: '../Profile/following' },
-  { label: 'Visited Cities', route: '../Profile/visited-cities' },
-  { label: 'Visited Countries', route: '../Profile/visited-countries' },
+  { label: 'Follows', route: '../Profile/following' },
+  { label: 'Visited Places', route: '../Profile/visited-countries' },
   { label: 'Lists', route: '../Profile/lists' },
   { label: 'Uploaded Journals', route: '../Profile/uploaded-journals' },
 ];

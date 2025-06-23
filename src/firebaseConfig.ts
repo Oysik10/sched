@@ -24,3 +24,4 @@ const auth = initializeAuth(app, {
 });
 const firestore = getFirestore(app);
 export { auth, app, firestore };
+export const db = getFirestore(app);
