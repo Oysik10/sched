@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Alert,
@@ -16,13 +15,13 @@ export default function SearchUsersScreen() {
   const [followedUids, setFollowedUids] = useState<string[]>([]);
 
   useEffect(() => {
-    const fetchFollowed = async () => {
+    const fetchFollowing = async () => {
       const currentUid = auth.currentUser?.uid;
       if (!currentUid) return;
-      const snapshot = await getDocs(collection(firestore, 'users', currentUid, 'friends'));
+      const snapshot = await getDocs(collection(firestore, 'users', currentUid, 'following'));
       setFollowedUids(snapshot.docs.map(doc => doc.id));
     };
-    fetchFollowed();
+    fetchFollowing();
   }, []);
 
   const handleSearch = async () => {
@@ -47,12 +46,21 @@ export default function SearchUsersScreen() {
   const handleAddFriend = async (friendUid: string) => {
     const currentUid = auth.currentUser?.uid;
     if (!currentUid) return;
-    const friendRef = doc(firestore, 'users', currentUid, 'friends', friendUid);
+
     try {
-      await setDoc(friendRef, { friendUid, addedAt: new Date() });
+      await setDoc(doc(firestore, 'users', currentUid, 'following', friendUid), {
+        followedUid: friendUid,
+        createdAt: new Date(),
+      });
+
+      await setDoc(doc(firestore, 'users', friendUid, 'followers', currentUid), {
+        followerUid: currentUid,
+        createdAt: new Date(),
+      });
+
       setFollowedUids(prev => [...prev, friendUid]);
     } catch (err) {
-      console.error('Add friend error:', err);
+      console.error('Follow error:', err);
       Alert.alert('Error', 'Could not follow user.');
     }
   };
@@ -60,9 +68,11 @@ export default function SearchUsersScreen() {
   const handleUnfollow = async (friendUid: string) => {
     const currentUid = auth.currentUser?.uid;
     if (!currentUid) return;
-    const friendRef = doc(firestore, 'users', currentUid, 'friends', friendUid);
+
     try {
-      await deleteDoc(friendRef);
+      await deleteDoc(doc(firestore, 'users', currentUid, 'following', friendUid));
+      await deleteDoc(doc(firestore, 'users', friendUid, 'followers', currentUid));
+
       setFollowedUids(prev => prev.filter(uid => uid !== friendUid));
     } catch (err) {
       console.error('Unfollow error:', err);
@@ -90,20 +100,19 @@ export default function SearchUsersScreen() {
           data={results}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => {
-            const isFollowing = followedUids.includes(item.uid);
+            const isFollowing = followedUids.includes(item.id);
             return (
               <View style={styles.userItem}>
-                <Text style={styles.username}>{item.username}</Text>
+                <Text style={styles.username}>@{item.username}</Text>
                 <Text style={styles.details}>{item.firstName} {item.lastName}</Text>
                 <TouchableOpacity
                   onPress={() =>
-                    isFollowing ? handleUnfollow(item.uid) : handleAddFriend(item.uid)
+                    isFollowing ? handleUnfollow(item.id) : handleAddFriend(item.id)
                   }
                   style={[
                     styles.addButton,
                     isFollowing && { backgroundColor: '#444' }
                   ]}
-                  disabled={false}
                 >
                   <Text style={styles.addButtonText}>
                     {isFollowing ? 'Following' : 'Start Following'}

@@ -11,7 +11,7 @@ const FollowingTab = () => {
       const currentUid = auth.currentUser?.uid;
       if (!currentUid) return;
 
-      const snapshot = await getDocs(collection(firestore, 'users', currentUid, 'friends'));
+      const snapshot = await getDocs(collection(firestore, 'users', currentUid, 'following'));
       const users = await Promise.all(
         snapshot.docs.map(async (docRef) => {
           const userDoc = await getDoc(doc(firestore, 'users', docRef.id));
