@@ -5,11 +5,11 @@ import { router } from 'expo-router';
 
 const TABS = [
   { label: 'Account Information', route: '../Profile/account-information' },
-  { label: 'Liked', route: '../Profile/liked' },
+  { label: 'Likes & Replies', route: '../Profile/liked' },
   { label: 'Follows', route: '../Profile/following' },
   { label: 'Visited Places', route: '../Profile/visited-countries' },
-  { label: 'Lists', route: '../Profile/lists' },
-  { label: 'Uploaded', route: '../Profile/uploaded' },
+  { label: 'Uploads', route: '../Profile/uploaded' },
+  { label: 'Bucketlist', route: '../Profile/wishlist' },
 ];
 
 
