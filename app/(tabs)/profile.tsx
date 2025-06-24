@@ -9,7 +9,7 @@ const TABS = [
   { label: 'Follows', route: '../Profile/following' },
   { label: 'Visited Places', route: '../Profile/visited-countries' },
   { label: 'Lists', route: '../Profile/lists' },
-  { label: 'Uploaded Journals', route: '../Profile/uploaded-journals' },
+  { label: 'Uploaded', route: '../Profile/uploaded' },
 ];
 
 

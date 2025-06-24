@@ -40,27 +40,17 @@ const AccountInformation = () => {
   const [currentPassword, setCurrentPassword] = useState('');
   const [photoURL, setPhotoURL] = useState('');
   const [loading, setLoading] = useState(false);
+  const [usernameAvailable, setUsernameAvailable] = useState<null | boolean>(null);
 
   useEffect(() => {
     const loadUserData = async () => {
-      if (!user) {
-        console.log('No authenticated user');
-        return;
-      }
-
-      console.log('Auth UID:', user.uid);
+      if (!user) return;
 
       const userDocRef = doc(db, 'users', user.uid);
       const userDoc = await getDoc(userDocRef);
-
-      if (!userDoc.exists()) {
-        console.log(`No document found for user UID: ${user.uid}`);
-        return;
-      }
+      if (!userDoc.exists()) return;
 
       const data = userDoc.data();
-      console.log('Loaded Firestore user data:', data);
-
       setName(`${data.firstName || ''} ${data.lastName || ''}`);
       setUsername(data.username || '');
       setPhotoURL(data.photoURL || '');
@@ -69,11 +59,18 @@ const AccountInformation = () => {
     loadUserData();
   }, []);
 
-  const checkUsernameTaken = async (newUsername: string) => {
-    const q = query(collection(db, 'users'), where('username', '==', newUsername));
-    const snapshot = await getDocs(q);
-    return !snapshot.empty && snapshot.docs[0].id !== user?.uid;
-  };
+  useEffect(() => {
+    const checkAvailability = async () => {
+      if (!username.trim()) return setUsernameAvailable(null);
+
+      const q = query(collection(db, 'users'), where('username', '==', username));
+      const snapshot = await getDocs(q);
+      const isTaken = !snapshot.empty && snapshot.docs[0].id !== user?.uid;
+      setUsernameAvailable(!isTaken);
+    };
+
+    checkAvailability();
+  }, [username]);
 
   const pickImage = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -97,15 +94,12 @@ const AccountInformation = () => {
   const handleUpdate = async () => {
     try {
       setLoading(true);
-      if (!user) return;
-
-      if (!name || !username) {
+      if (!user || !name || !username) {
         Alert.alert('Error', 'Please fill in all fields.');
         return;
       }
 
-      const usernameTaken = await checkUsernameTaken(username);
-      if (usernameTaken) {
+      if (usernameAvailable === false) {
         Alert.alert('Error', 'Username is already taken.');
         return;
       }
@@ -140,15 +134,10 @@ const AccountInformation = () => {
         try {
           const cred = EmailAuthProvider.credential(user?.email!, password);
           await reauthenticateWithCredential(user!, cred);
-
-          // Delete Firestore user doc
           await deleteDoc(doc(db, 'users', user.uid));
-
-          // Delete the Auth user
           await deleteUser(user!);
-
           Alert.alert('Deleted', 'Your account has been deleted.');
-          router.replace('../..'); // adjust if your login route is different
+          router.replace('../..');
         } catch (error: any) {
           Alert.alert('Error', error.message);
         }
@@ -189,7 +178,21 @@ const AccountInformation = () => {
       <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Enter your name" />
 
       <Text style={styles.label}>Username</Text>
-      <TextInput style={styles.input} value={username} onChangeText={setUsername} placeholder="Choose a username" />
+      <View style={styles.usernameRow}>
+        <Text style={styles.at}>@</Text>
+        <TextInput
+          style={[styles.input, { flex: 1 }]}
+          value={username}
+          onChangeText={setUsername}
+          placeholder="Choose a username"
+          autoCapitalize="none"
+        />
+        {username.length > 0 && usernameAvailable !== null && (
+          <Text style={[styles.icon, usernameAvailable ? styles.valid : styles.invalid]}>
+            {usernameAvailable ? '✓' : '✗'}
+          </Text>
+        )}
+      </View>
 
       <Text style={styles.label}>New Password</Text>
       <TextInput
@@ -267,6 +270,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     backgroundColor: '#f9f9f9',
   },
+  usernameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  at: {
+    fontSize: 18,
+    paddingHorizontal: 6,
+    color: '#333',
+  },
+  icon: {
+    fontSize: 18,
+    marginLeft: 8,
+  },
+  valid: { color: '#4CAF50' },
+  invalid: { color: '#F44336' },
   updateButton: {
     backgroundColor: '#3478f6',
     padding: 14,
