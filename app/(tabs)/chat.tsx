@@ -1,118 +1,295 @@
 // app/(tabs)/chat.tsx
-import React, { useState, useEffect, useRef } from 'react';
-import { View, TextInput, FlatList, Text, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+  TextInput,
+} from 'react-native';
 import { auth, firestore } from '../../src/firebaseConfig';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import {
+  collection,
+  onSnapshot,
+  orderBy,
+  query,
+  doc,
+  getDoc,
+  where,
+  getDocs,
+} from 'firebase/firestore';
 
 const CHAT_ID = 'global';
 
+type Msg = {
+  id: string;
+  text: string;
+  senderId: string;
+  timestamp?: any; // Firestore Timestamp
+};
+
+type SenderPreview = {
+  senderId: string;
+  lastText: string;
+  lastAt?: number; // millis
+};
+
+type UserHit = {
+  id: string;
+  username?: string;
+  firstName?: string;
+  lastName?: string;
+};
+
 export default function ChatScreen() {
-  const [messages, setMessages] = useState<any[]>([]);
-  const [text, setText] = useState('');
-  const flatListRef = useRef<FlatList>(null);
+  const me = auth.currentUser?.uid ?? null;
 
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [profiles, setProfiles] = useState<
+    Record<string, { username?: string; firstName?: string; lastName?: string }>
+  >({});
+
+  // search state
+  const [search, setSearch] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<UserHit[]>([]);
+
+  // Subscribe to all messages in the room
   useEffect(() => {
-    const q = query(
-      collection(firestore, 'messages', CHAT_ID, 'items'),
-      orderBy('timestamp', 'asc')
+    const q = query(collection(firestore, 'messages', CHAT_ID, 'items'), orderBy('timestamp', 'asc'));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
+        setMessages(list);
+        setLoading(false);
+      },
+      () => setLoading(false)
     );
-
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newMessages = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      }));
-      setMessages(newMessages);
-    });
-
-    return unsubscribe;
+    return unsub;
   }, []);
 
-  const sendMessage = async () => {
-    if (!text.trim()) return;
-    const user = auth.currentUser;
-    if (!user) return;
+  // Compute the latest message per sender
+  const previews: SenderPreview[] = useMemo(() => {
+    const map = new Map<string, SenderPreview>();
+    for (const m of messages) {
+      const t = m.timestamp?.toMillis ? m.timestamp.toMillis() : 0;
+      const prev = map.get(m.senderId);
+      if (!prev || t >= (prev.lastAt ?? -1)) {
+        map.set(m.senderId, { senderId: m.senderId, lastText: m.text, lastAt: t });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0));
+  }, [messages]);
 
-    await addDoc(collection(firestore, 'messages', CHAT_ID, 'items'), {
-      text,
-      senderId: user.uid,
-      timestamp: serverTimestamp(),
-    });
+  // Fetch profiles for any sender we don't know yet
+  useEffect(() => {
+    const unknown = previews.map((p) => p.senderId).filter((id) => !(id in profiles));
+    if (unknown.length === 0) return;
 
-    setText('');
-    flatListRef.current?.scrollToEnd({ animated: true });
+    let cancelled = false;
+    (async () => {
+      const found: Record<string, any> = {};
+      await Promise.all(
+        unknown.map(async (uid) => {
+          try {
+            const uref = doc(firestore, 'users', uid);
+            const snap = await getDoc(uref);
+            found[uid] = snap.exists() ? snap.data() : {};
+          } catch {
+            found[uid] = {};
+          }
+        })
+      );
+      if (!cancelled) setProfiles((prev) => ({ ...prev, ...found }));
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previews, profiles]);
+
+  const displayName = (uid: string) => {
+    if (uid === me) return 'You';
+    const p = profiles[uid] || {};
+    if (p.username) return `@${p.username}`;
+    const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
+    return name || 'Unknown';
   };
 
-  return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={80}
-    >
-      <FlatList
-        ref={flatListRef}
-        data={messages}
-        renderItem={({ item }) => (
-          <View style={[styles.messageBubble, item.senderId === auth.currentUser?.uid ? styles.myMessage : styles.theirMessage]}>
-            <Text style={styles.messageText}>{item.text}</Text>
-          </View>
-        )}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ padding: 16 }}
-      />
-      <View style={styles.inputRow}>
-        <TextInput
-          style={styles.input}
-          value={text}
-          onChangeText={setText}
-          placeholder="Type a message"
-          placeholderTextColor="#888"
-        />
-        <TouchableOpacity onPress={sendMessage} style={styles.sendButton}>
-          <Text style={{ color: '#fff', fontWeight: 'bold' }}>Send</Text>
-        </TouchableOpacity>
+  // ---- Search users by @username (debounced) ----
+  useEffect(() => {
+    const term = search.trim().replace(/^@/, '').toLowerCase();
+    if (!term) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const usersRef = collection(firestore, 'users');
+        // username prefix query
+        const q = query(
+          usersRef,
+          where('username', '>=', term),
+          where('username', '<=', term + '\uf8ff')
+        );
+        const snap = await getDocs(q);
+        const hits: UserHit[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        if (!cancelled) setResults(hits);
+      } catch (e) {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [search]);
+  // -----------------------------------------------
+
+  const renderPreview = ({ item }: { item: SenderPreview }) => (
+    <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>
+          {displayName(item.senderId).replace(/^@/, '').slice(0, 1).toUpperCase()}
+        </Text>
       </View>
-    </KeyboardAvoidingView>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.name} numberOfLines={1}>
+          {displayName(item.senderId)}
+        </Text>
+        <Text style={styles.lastText} numberOfLines={1}>
+          {item.lastText}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  const renderUser = ({ item }: { item: UserHit }) => (
+    <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>
+          {(item.username?.[0] || item.firstName?.[0] || '?').toUpperCase()}
+        </Text>
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.name} numberOfLines={1}>
+          {item.username ? `@${item.username}` : 'Unknown'}
+        </Text>
+        <Text style={styles.lastText} numberOfLines={1}>
+          {[item.firstName, item.lastName].filter(Boolean).join(' ') || '—'}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
+
+  const showSearchResults = search.trim().length > 0;
+
+  return (
+    <View style={styles.container}>
+      {/* Search bar with @ prefix */}
+      <View style={styles.searchRow}>
+        <Text style={styles.atSymbol}>@</Text>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search username"
+          placeholderTextColor="#888"
+          value={search}
+          onChangeText={(v) => setSearch(v.replace(/\s/g, ''))}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+        />
+      </View>
+
+      {/* Results / Previews */}
+      {showSearchResults ? (
+        searching ? (
+          <View style={styles.center}><ActivityIndicator /></View>
+        ) : results.length === 0 ? (
+          <View style={styles.center}><Text style={{ color: '#888' }}>No users found.</Text></View>
+        ) : (
+          <FlatList
+            data={results}
+            keyExtractor={(i) => i.id}
+            renderItem={renderUser}
+            contentContainerStyle={{ padding: 12 }}
+          />
+        )
+      ) : previews.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={{ color: '#888' }}>No messages yet.</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={previews}
+          keyExtractor={(i) => i.senderId}
+          renderItem={renderPreview}
+          contentContainerStyle={{ padding: 12 }}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
-  messageBubble: {
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 10,
-    maxWidth: '75%',
-  },
-  myMessage: {
-    backgroundColor: '#1e3a8a',
-    alignSelf: 'flex-end',
-  },
-  theirMessage: {
-    backgroundColor: '#333',
-    alignSelf: 'flex-start',
-  },
-  messageText: { color: '#fff' },
-  inputRow: {
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // search
+  searchRow: {
     flexDirection: 'row',
-    padding: 10,
-    borderTopColor: '#333',
-    borderTopWidth: 1,
+    alignItems: 'center',
     backgroundColor: '#111',
-  },
-  input: {
-    flex: 1,
-    height: 40,
-    color: '#fff',
-    backgroundColor: '#222',
-    borderRadius: 8,
+    borderRadius: 10,
+    borderColor: '#222',
+    borderWidth: 1,
+    margin: 12,
+    height: 44,
     paddingHorizontal: 12,
-    marginRight: 8,
   },
-  sendButton: {
-    backgroundColor: '#1e3a8a',
-    paddingHorizontal: 16,
-    borderRadius: 8,
+  atSymbol: { color: '#888', fontSize: 16, marginRight: 6 },
+  searchInput: { flex: 1, color: '#fff', fontSize: 16 },
+
+  // list rows
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+    borderColor: '#222',
+    borderWidth: 1,
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1f2937',
+    alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 10,
   },
+  avatarText: { color: '#e5e7eb', fontWeight: '700', fontSize: 14 },
+  name: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  lastText: { color: '#bbb', marginTop: 2 },
 });

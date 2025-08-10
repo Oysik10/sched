@@ -5,8 +5,7 @@ import {
 import {
   collection, query, where, getDocs, doc, setDoc, getDoc, deleteDoc
 } from 'firebase/firestore';
-import { firestore } from '../../src/firebaseConfig';
-import { auth } from '../../src/firebaseConfig';
+import { firestore, auth } from '../../src/firebaseConfig';
 
 export default function SearchUsersScreen() {
   const [search, setSearch] = useState('');
@@ -58,7 +57,7 @@ export default function SearchUsersScreen() {
         createdAt: new Date(),
       });
 
-      setFollowedUids(prev => [...prev, friendUid]);
+      setFollowedUids(prev => [...prev, friendUid]); // stays as "Sent"
     } catch (err) {
       console.error('Follow error:', err);
       Alert.alert('Error', 'Could not follow user.');
@@ -83,14 +82,17 @@ export default function SearchUsersScreen() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Search Users</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Enter username"
-        placeholderTextColor="#888"
-        value={search}
-        onChangeText={setSearch}
-        onSubmitEditing={handleSearch}
-      />
+      <View style={styles.searchRow}>
+        <Text style={styles.atSymbol}>@</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="Enter username"
+          placeholderTextColor="#888"
+          value={search}
+          onChangeText={(text) => setSearch(text.replace(/\s/g, ''))} // no spaces
+          onSubmitEditing={handleSearch}
+        />
+      </View>
       {loading ? (
         <Text style={styles.status}>Searching...</Text>
       ) : results.length === 0 && search ? (
@@ -130,10 +132,26 @@ export default function SearchUsersScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000', padding: 20 },
   title: { color: '#fff', fontSize: 22, fontWeight: 'bold', marginBottom: 16 },
-  input: {
-    height: 48, backgroundColor: '#111', color: '#fff', borderRadius: 8,
-    paddingHorizontal: 12, borderColor: '#444', borderWidth: 1,
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#111',
+    borderRadius: 8,
+    borderColor: '#444',
+    borderWidth: 1,
     marginBottom: 12,
+    height: 48,
+    paddingHorizontal: 12,
+  },
+  atSymbol: {
+    color: '#888',
+    fontSize: 16,
+    marginRight: 4,
+  },
+  input: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 16,
   },
   status: { color: '#888', textAlign: 'center', marginTop: 16 },
   userItem: {

@@ -1,14 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
-import {
-  collection,
-  doc,
-  onSnapshot,
-  getDoc,
-  writeBatch,
-  setDoc,
-} from "firebase/firestore";
+import { collection, doc, onSnapshot, getDoc, writeBatch } from "firebase/firestore";
 import { firestore, auth } from "../src/firebaseConfig";
+import { router } from "expo-router"; 
+
 
 type Friend = {
   id: string;
@@ -46,7 +41,7 @@ const FriendsScreen = () => {
     };
   }, [currentUid]);
 
-  // Load mutual friends (intersection)
+  // Load mutual friends
   useEffect(() => {
     if (!currentUid) return;
 
@@ -73,12 +68,10 @@ const FriendsScreen = () => {
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [followers, following, currentUid]);
 
-  // Load incoming requests (followers minus following)
+  // Load incoming requests
   useEffect(() => {
     if (!currentUid) return;
 
@@ -111,65 +104,34 @@ const FriendsScreen = () => {
   const acceptRequest = async (otherUid: string) => {
     if (!currentUid) return;
     const batch = writeBatch(firestore);
-
-    // You start following them
     batch.set(doc(firestore, "users", currentUid, "following", otherUid), { createdAt: Date.now() });
-    // Ensure they have you in followers (idempotent)
     batch.set(doc(firestore, "users", otherUid, "followers", currentUid), { createdAt: Date.now() });
-
-    try {
-      await batch.commit();
-    } catch (e) {
-      console.warn("Failed to accept:", e);
-    }
+    try { await batch.commit(); } catch (e) { console.warn("Failed to accept:", e); }
   };
 
   const declineRequest = async (otherUid: string) => {
     if (!currentUid) return;
     const batch = writeBatch(firestore);
-
-    // Remove their follow on you (both sides of that one-way relation)
     batch.delete(doc(firestore, "users", currentUid, "followers", otherUid));
     batch.delete(doc(firestore, "users", otherUid, "following", currentUid));
-
-    try {
-      await batch.commit();
-    } catch (e) {
-      console.warn("Failed to decline:", e);
-    }
+    try { await batch.commit(); } catch (e) { console.warn("Failed to decline:", e); }
   };
 
   const unfriend = async (otherUid: string) => {
     if (!currentUid) return;
-
-    // Remove both directions (mutual)
     const batch = writeBatch(firestore);
-
-    // You following them
     batch.delete(doc(firestore, "users", currentUid, "following", otherUid));
-    // They following you
     batch.delete(doc(firestore, "users", otherUid, "followers", currentUid));
-
-    // Reverse direction
     batch.delete(doc(firestore, "users", otherUid, "following", currentUid));
     batch.delete(doc(firestore, "users", currentUid, "followers", otherUid));
-
-    try {
-      await batch.commit();
-    } catch (e) {
-      console.warn("Failed to unfriend:", e);
-    }
+    try { await batch.commit(); } catch (e) { console.warn("Failed to unfriend:", e); }
   };
 
   const renderRequestItem = ({ item }: { item: Friend }) => (
     <View style={styles.reqItem}>
       <View style={{ flexShrink: 1 }}>
-        <Text style={styles.username} numberOfLines={1}>
-          {item.username || "@unknown"}
-        </Text>
-        <Text style={styles.details} numberOfLines={1}>
-          {(item.firstName || "") + " " + (item.lastName || "")}
-        </Text>
+        <Text style={styles.username} numberOfLines={1}>{item.username || "@unknown"}</Text>
+        <Text style={styles.details} numberOfLines={1}>{(item.firstName || "") + " " + (item.lastName || "")}</Text>
       </View>
       <View style={styles.reqActions}>
         <TouchableOpacity style={[styles.chipBtn, styles.acceptBtn]} onPress={() => acceptRequest(item.id)}>
@@ -185,12 +147,8 @@ const FriendsScreen = () => {
   const renderFriendItem = ({ item }: { item: Friend }) => (
     <View style={styles.userItem}>
       <View style={{ flexShrink: 1 }}>
-        <Text style={styles.username} numberOfLines={1}>
-          {item.username || "@unknown"}
-        </Text>
-        <Text style={styles.details} numberOfLines={1}>
-          {(item.firstName || "") + " " + (item.lastName || "")}
-        </Text>
+        <Text style={styles.username} numberOfLines={1}>{item.username || "@unknown"}</Text>
+        <Text style={styles.details} numberOfLines={1}>{(item.firstName || "") + " " + (item.lastName || "")}</Text>
       </View>
       <TouchableOpacity style={styles.unfriendBtn} onPress={() => unfriend(item.id)}>
         <Text style={styles.unfriendText}>Unfriend</Text>
@@ -208,11 +166,21 @@ const FriendsScreen = () => {
 
   return (
     <View style={{ flex: 1 }}>
+      {/* Header with button */}
+        <View style={styles.headerRow}>
+          <Text style={styles.sectionTitle}>
+            Friend Requests {loadingRequests ? "" : `(${requests.length})`}
+          </Text>
+          <TouchableOpacity
+            onPress={() => router.push("/sentrequests")}
+            style={{ padding: 8 }}
+          >
+            <Text style={styles.sentRequestsBtn}>Sent Requests</Text>
+          </TouchableOpacity>
+        </View>
+
       {/* Top quarter: Friend Requests */}
       <View style={styles.requestsContainer}>
-        <Text style={styles.sectionTitle}>
-          Friend Requests {loadingRequests ? "" : `(${requests.length})`}
-        </Text>
         {loadingRequests ? (
           <View style={styles.center}><ActivityIndicator /></View>
         ) : (
@@ -228,9 +196,7 @@ const FriendsScreen = () => {
 
       {/* Bottom: Friends (flex rest) */}
       <View style={styles.friendsContainer}>
-        <Text style={styles.sectionTitle}>
-          Friends {loadingFriends ? "" : `(${friends.length})`}
-        </Text>
+        <Text style={styles.sectionTitle}>Friends {loadingFriends ? "" : `(${friends.length})`}</Text>
         {loadingFriends ? (
           <View style={styles.center}><ActivityIndicator /></View>
         ) : (
@@ -250,16 +216,24 @@ const FriendsScreen = () => {
 export default FriendsScreen;
 
 const styles = StyleSheet.create({
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    backgroundColor: "#0f0f0f",
+  },
+  sentRequestsBtn: {
+    color: "#4f8ef7",
+    fontWeight: "600",
+    fontSize: 14,
+  },
   sectionTitle: {
     color: "#fff",
     fontSize: 18,
     fontWeight: "700",
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 6,
   },
-
-  // Requests (top quarter)
   requestsContainer: {
     height: "25%",
     backgroundColor: "#0f0f0f",
@@ -277,20 +251,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   reqActions: { flexDirection: "row", gap: 8 },
-  chipBtn: {
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  acceptBtn: { borderColor: "#51ff87", backgroundColor: "transparent" },
-  declineBtn: { borderColor: "#f55", backgroundColor: "transparent" },
+  chipBtn: { paddingVertical: 6, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1 },
+  acceptBtn: { borderColor: "#51ff87" },
+  declineBtn: { borderColor: "#f55" },
   chipText: { fontWeight: "700" },
   acceptText: { color: "#51ff87" },
   declineText: { color: "#f55" },
-
-  // Friends (bottom)
-  friendsContainer: { flex: 1, backgroundColor: "#0b0b0b" },
+  friendsContainer: { flex: 1, backgroundColor: "#0b0b0b", paddingTop: 6 },
   userItem: {
     flexDirection: "row",
     justifyContent: "space-between",
