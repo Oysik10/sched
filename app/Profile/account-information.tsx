@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   Image,
+  Platform,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import {
@@ -30,9 +31,11 @@ import {
 import { db } from '../../src/firebaseConfig';
 import { router } from 'expo-router';
 
+const USERNAME_RE = /^[a-z0-9._]{3,20}$/; // 3–20 chars, lowercase, digits, dot, underscore
+
 const AccountInformation = () => {
   const auth = getAuth();
-  const user = auth.currentUser;
+  const [user, setUser] = useState(auth.currentUser);
 
   const [name, setName] = useState('');
   const [username, setUsername] = useState('');
@@ -42,35 +45,66 @@ const AccountInformation = () => {
   const [loading, setLoading] = useState(false);
   const [usernameAvailable, setUsernameAvailable] = useState<null | boolean>(null);
 
+  // keep user in sync across auth state changes
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(setUser);
+    return unsub;
+  }, [auth]);
+
+  // Load profile
   useEffect(() => {
     const loadUserData = async () => {
       if (!user) return;
 
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDoc = await getDoc(userDocRef);
-      if (!userDoc.exists()) return;
+      try {
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
+        if (!userDoc.exists()) return;
 
-      const data = userDoc.data();
-      setName(`${data.firstName || ''} ${data.lastName || ''}`);
-      setUsername(data.username || '');
-      setPhotoURL(data.photoURL || '');
+        const data = userDoc.data() as any;
+        setName(`${data.firstName || ''} ${data.lastName || ''}`.trim());
+        setUsername((data.username || '').toLowerCase());
+        setPhotoURL(data.photoURL || '');
+      } catch (e: any) {
+        console.warn('Failed to load user data:', e?.message || e);
+      }
     };
 
     loadUserData();
-  }, []);
+  }, [user]);
 
+  // Debounced username availability
   useEffect(() => {
-    const checkAvailability = async () => {
-      if (!username.trim()) return setUsernameAvailable(null);
+    let cancelled = false;
 
-      const q = query(collection(db, 'users'), where('username', '==', username));
-      const snapshot = await getDocs(q);
-      const isTaken = !snapshot.empty && snapshot.docs[0].id !== user?.uid;
-      setUsernameAvailable(!isTaken);
+    const checkAvailability = async () => {
+      const handle = username.trim().toLowerCase();
+      if (!handle) {
+        setUsernameAvailable(null);
+        return;
+      }
+      if (!USERNAME_RE.test(handle)) {
+        setUsernameAvailable(null);
+        return;
+      }
+
+      try {
+        const q = query(collection(db, 'users'), where('username', '==', handle));
+        const snapshot = await getDocs(q);
+        // if a doc exists but it's your own UID, it's still available to you
+        const isTaken = snapshot.docs.some((d) => d.id !== user?.uid);
+        if (!cancelled) setUsernameAvailable(!isTaken);
+      } catch (e) {
+        if (!cancelled) setUsernameAvailable(null);
+      }
     };
 
-    checkAvailability();
-  }, [username]);
+    const t = setTimeout(checkAvailability, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [username, user?.uid]);
 
   const pickImage = async () => {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -88,29 +122,61 @@ const AccountInformation = () => {
 
     if (!result.canceled) {
       setPhotoURL(result.assets[0].uri);
+      // Note: this is a local URI. To persist, upload to Storage and save the public URL.
     }
   };
 
   const handleUpdate = async () => {
+    if (!user) {
+      Alert.alert('Session expired', 'Please sign in again.');
+      router.replace('/');
+      return;
+    }
+
+    if (!name.trim() || !username.trim()) {
+      Alert.alert('Error', 'Please fill in all fields.');
+      return;
+    }
+
+    // normalize username
+    const handle = username.trim().toLowerCase();
+    if (!USERNAME_RE.test(handle)) {
+      Alert.alert(
+        'Invalid username',
+        'Use 3–20 characters: lowercase letters, numbers, dot, or underscore.'
+      );
+      return;
+    }
+
+    if (usernameAvailable === false) {
+      Alert.alert('Error', 'Username is already taken.');
+      return;
+    }
+
+    // If changing password, ensure currentPassword provided and email exists
+    const wantsPasswordChange = Boolean(newPassword);
+    if (wantsPasswordChange && !currentPassword) {
+      Alert.alert('Missing password', 'Please enter your current password.');
+      return;
+    }
+    if (wantsPasswordChange && !user.email) {
+      Alert.alert(
+        'Unsupported for this account',
+        'This account does not have an email/password sign-in method.'
+      );
+      return;
+    }
+
+    setLoading(true);
     try {
-      setLoading(true);
-      if (!user || !name || !username) {
-        Alert.alert('Error', 'Please fill in all fields.');
-        return;
-      }
-
-      if (usernameAvailable === false) {
-        Alert.alert('Error', 'Username is already taken.');
-        return;
-      }
-
+      // Update profile fields in Firestore
       await updateDoc(doc(db, 'users', user.uid), {
-        name,
-        username,
+        name: name.trim(),
+        username: handle,
         photoURL,
       });
 
-      if (newPassword && currentPassword) {
+      if (wantsPasswordChange) {
         const cred = EmailAuthProvider.credential(user.email!, currentPassword);
         await reauthenticateWithCredential(user, cred);
         await updatePassword(user, newPassword);
@@ -119,42 +185,75 @@ const AccountInformation = () => {
 
       Alert.alert('Success', 'Profile updated.');
     } catch (error: any) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || 'Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
+  // Delete account flow (with password prompt for email/password users)
   const promptDeleteWithPassword = () => {
-    Alert.prompt(
-      'Enter Password',
-      'Please enter your current password to delete your account.',
-      async (password) => {
-        if (!password) return;
-        try {
-          const cred = EmailAuthProvider.credential(user?.email!, password);
-          await reauthenticateWithCredential(user!, cred);
-          await deleteDoc(doc(db, 'users', user.uid));
-          await deleteUser(user!);
-          Alert.alert('Deleted', 'Your account has been deleted.');
-          router.replace('../..');
-        } catch (error: any) {
-          Alert.alert('Error', error.message);
-        }
-      },
-      'secure-text'
-    );
+    if (!user) {
+      Alert.alert('Session expired', 'Please sign in again.');
+      router.replace('/');
+      return;
+    }
+    if (!user.email) {
+      Alert.alert(
+        'Unsupported for this account',
+        'This account does not have an email/password sign-in method.'
+      );
+      return;
+    }
+
+    if (Platform.OS === 'ios') {
+      Alert.prompt(
+        'Enter Password',
+        'Please enter your current password to delete your account.',
+        async (password) => {
+          if (!password) return;
+          await actuallyDeleteAccount(password);
+        },
+        'secure-text'
+      );
+    } else {
+      // Simple fallback for Android/web where Alert.prompt isn’t available
+      Alert.alert(
+        'Delete Account',
+        'Password re-authentication is required. Please go to Settings > Security to re-authenticate, then try again.',
+        [{ text: 'OK' }]
+      );
+    }
   };
 
-  const handleDeleteAccount = () => {
-    Alert.alert(
-      'Delete Account',
-      'Are you sure you want to delete your account? This action is irreversible.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete', style: 'destructive', onPress: promptDeleteWithPassword },
-      ]
-    );
+  const actuallyDeleteAccount = async (password: string) => {
+    const current = getAuth().currentUser;
+    if (!current) {
+      Alert.alert('Session expired', 'Please sign in again.');
+      router.replace('/');
+      return;
+    }
+    if (!current.email) {
+      Alert.alert('Unsupported', 'This account has no email/password sign-in.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const cred = EmailAuthProvider.credential(current.email, password);
+      await reauthenticateWithCredential(current, cred);
+
+      // Delete Firestore doc first, then Auth user
+      await deleteDoc(doc(db, 'users', current.uid));
+      await deleteUser(current);
+
+      Alert.alert('Deleted', 'Your account has been deleted.');
+      router.replace('../..');
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Could not delete account.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -175,7 +274,12 @@ const AccountInformation = () => {
       </View>
 
       <Text style={styles.label}>Name</Text>
-      <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Enter your name" />
+      <TextInput
+        style={styles.input}
+        value={name}
+        onChangeText={setName}
+        placeholder="Enter your name"
+      />
 
       <Text style={styles.label}>Username</Text>
       <View style={styles.usernameRow}>
@@ -183,7 +287,7 @@ const AccountInformation = () => {
         <TextInput
           style={[styles.input, { flex: 1 }]}
           value={username}
-          onChangeText={setUsername}
+          onChangeText={(v) => setUsername(v.replace(/^@/, '').toLowerCase())}
           placeholder="Choose a username"
           autoCapitalize="none"
         />
@@ -193,6 +297,11 @@ const AccountInformation = () => {
           </Text>
         )}
       </View>
+      {username.length > 0 && !USERNAME_RE.test(username) && (
+        <Text style={{ color: '#F44336', marginTop: 4 }}>
+          Use 3–20 characters: lowercase letters, numbers, dot, or underscore.
+        </Text>
+      )}
 
       <Text style={styles.label}>New Password</Text>
       <TextInput
@@ -220,7 +329,7 @@ const AccountInformation = () => {
             <Text style={styles.buttonText}>Update Account</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
+          <TouchableOpacity style={styles.deleteButton} onPress={promptDeleteWithPassword}>
             <Text style={styles.buttonText}>Delete Account</Text>
           </TouchableOpacity>
         </>

@@ -115,7 +115,7 @@ export default function SearchUsersScreen() {
                   ]}
                 >
                   <Text style={styles.addButtonText}>
-                    {isFollowing ? 'Following' : 'Start Following'}
+                    {isFollowing ? 'Sent' : 'Send Friend Request'}
                   </Text>
                 </TouchableOpacity>
               </View>
