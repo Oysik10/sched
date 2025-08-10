@@ -20,6 +20,7 @@ import {
   where,
   getDocs,
 } from 'firebase/firestore';
+import { router } from 'expo-router';
 
 const CHAT_ID = 'global';
 
@@ -158,7 +159,11 @@ export default function ChatScreen() {
   // -----------------------------------------------
 
   const renderPreview = ({ item }: { item: SenderPreview }) => (
-    <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={styles.row}
+      activeOpacity={0.7}
+      onPress={() => router.push(`/dm/${item.senderId}`)}
+    >
       <View style={styles.avatar}>
         <Text style={styles.avatarText}>
           {displayName(item.senderId).replace(/^@/, '').slice(0, 1).toUpperCase()}
@@ -175,8 +180,12 @@ export default function ChatScreen() {
     </TouchableOpacity>
   );
 
-  const renderUser = ({ item }: { item: UserHit }) => (
-    <TouchableOpacity style={styles.row} activeOpacity={0.7}>
+    const renderUser = ({ item }: { item: UserHit }) => (
+      <TouchableOpacity
+        style={styles.row}
+        activeOpacity={0.7}
+        onPress={() => router.push(`/dm/${item.id}`)}  // ✅ use id
+      >
       <View style={styles.avatar}>
         <Text style={styles.avatarText}>
           {(item.username?.[0] || item.firstName?.[0] || '?').toUpperCase()}
@@ -227,24 +236,22 @@ export default function ChatScreen() {
         ) : results.length === 0 ? (
           <View style={styles.center}><Text style={{ color: '#888' }}>No users found.</Text></View>
         ) : (
-          <FlatList
-            data={results}
-            keyExtractor={(i) => i.id}
-            renderItem={renderUser}
-            contentContainerStyle={{ padding: 12 }}
-          />
+        <FlatList<UserHit>
+          data={results}
+          keyExtractor={(i) => i.id}           // ✅ id for user hits
+          renderItem={renderUser}
+        />
         )
       ) : previews.length === 0 ? (
         <View style={styles.center}>
           <Text style={{ color: '#888' }}>No messages yet.</Text>
         </View>
       ) : (
-        <FlatList
-          data={previews}
-          keyExtractor={(i) => i.senderId}
-          renderItem={renderPreview}
-          contentContainerStyle={{ padding: 12 }}
-        />
+      <FlatList<SenderPreview>
+        data={previews}
+        keyExtractor={(i) => i.senderId}     // ✅ senderId for previews
+        renderItem={renderPreview}
+      />
       )}
     </View>
   );
