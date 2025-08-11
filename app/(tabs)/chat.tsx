@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+// app/(tabs)/chat.tsx
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +19,7 @@ import {
   getDoc,
   where,
   getDocs,
+  updateDoc,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { router } from 'expo-router';
@@ -27,7 +29,9 @@ type Thread = {
   participants: string[];
   lastMessage?: string;
   lastSenderId?: string;
-  updatedAt?: any; // Firestore Timestamp
+  updatedAt?: any;                  // optional Firestore Timestamp
+  updatedAtMs?: number;             // client millis for ordering
+  lastSeen?: Record<string, number>; // { [uid]: millis }
 };
 
 type UserHit = {
@@ -38,7 +42,7 @@ type UserHit = {
 };
 
 export default function ChatScreen() {
-  // Auth-ready uid (don’t rely on auth.currentUser immediately)
+  // Auth-ready uid
   const [uid, setUid] = useState<string>('');
 
   // Inbox threads
@@ -64,14 +68,13 @@ export default function ChatScreen() {
   // Subscribe to my DM threads in real time
   useEffect(() => {
     if (!uid) return;
-    // Query: all threads where I'm a participant, newest first
-    const q = query(
+    const qy = query(
       collection(firestore, 'dms'),
       where('participants', 'array-contains', uid),
       orderBy('updatedAtMs', 'desc')
     );
     const unsub = onSnapshot(
-      q,
+      qy,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Thread[];
         setThreads(list);
@@ -126,7 +129,7 @@ export default function ChatScreen() {
     return name || 'Unknown';
   };
 
-  // -------- Username search (unchanged, debounced) --------
+  // -------- Username search (debounced; ALWAYS exclude self) --------
   useEffect(() => {
     const term = search.trim().replace(/^@/, '').toLowerCase();
     if (!term) {
@@ -140,13 +143,15 @@ export default function ChatScreen() {
     const t = setTimeout(async () => {
       try {
         const usersRef = collection(firestore, 'users');
-        const q = query(
+        const qy = query(
           usersRef,
           where('username', '>=', term),
           where('username', '<=', term + '\uf8ff')
         );
-        const snap = await getDocs(q);
-        const hits: UserHit[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        const snap = await getDocs(qy);
+        const hits: UserHit[] = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as any) }))
+          .filter((u) => u.id !== uid); // ← exclude yourself
         if (!cancelled) setResults(hits);
       } catch (e) {
         if (!cancelled) setResults([]);
@@ -159,18 +164,34 @@ export default function ChatScreen() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [search]);
+  }, [search, uid]);
   // --------------------------------------------------------
 
-  // Render a single thread row (other user’s name + last message)
+  // Render a single thread row (other user’s name + last message + unread dot)
   const renderThread = ({ item }: { item: Thread }) => {
     const otherId = (item.participants || []).find((p) => p !== uid) || '';
     const lastText = item.lastMessage || '—';
+    const lastSeenMine = item.lastSeen?.[uid] ?? 0;
+    const updatedMs = item.updatedAtMs ?? 0;
+    const unread = item.lastSenderId !== uid && updatedMs > lastSeenMine;
+
+    const handleOpenThread = async () => {
+      try {
+        // ✅ Mark as read before navigating so the blue dot disappears
+        await updateDoc(doc(firestore, 'dms', item.id), {
+          [`lastSeen.${uid}`]: Date.now(),
+        });
+      } catch (err) {
+        console.warn('Error marking thread as read:', err);
+      }
+      router.push(`/dm/${otherId}`);
+    };
+
     return (
       <TouchableOpacity
         style={styles.row}
         activeOpacity={0.7}
-        onPress={() => router.push(`/dm/${otherId}`)}
+        onPress={handleOpenThread}
       >
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
@@ -178,10 +199,13 @@ export default function ChatScreen() {
           </Text>
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={styles.name} numberOfLines={1}>
-            {displayName(otherId)}
-          </Text>
-          <Text style={styles.lastText} numberOfLines={1}>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
+              {displayName(otherId)}
+            </Text>
+            {unread && <View style={styles.unreadDot} />}
+          </View>
+          <Text style={[styles.lastText, unread && styles.lastTextUnread]} numberOfLines={1}>
             {lastText}
           </Text>
         </View>
@@ -189,7 +213,7 @@ export default function ChatScreen() {
     );
   };
 
-  // Render a user search hit
+  // Render a user search hit (self is already excluded above)
   const renderUser = ({ item }: { item: UserHit }) => (
     <TouchableOpacity
       style={styles.row}
@@ -232,7 +256,7 @@ export default function ChatScreen() {
           placeholder="Search username"
           placeholderTextColor="#888"
           value={search}
-          onChangeText={(v) => setSearch(v.replace(/\s/g, ''))}
+          onChangeText={(v) => setSearch(v.replace(/\s/g, '').toLowerCase())} // no spaces + lowercase
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
@@ -311,4 +335,20 @@ const styles = StyleSheet.create({
   avatarText: { color: '#e5e7eb', fontWeight: '700', fontSize: 14 },
   name: { color: '#fff', fontSize: 16, fontWeight: '700' },
   lastText: { color: '#bbb', marginTop: 2 },
+
+  // unread styling
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#3b82f6', // blue
+    marginLeft: 6,
+  },
+  nameUnread: {
+    color: '#ffffff',
+    fontWeight: '800',
+  },
+  lastTextUnread: {
+    color: '#dbeafe', // light blue
+  },
 });
