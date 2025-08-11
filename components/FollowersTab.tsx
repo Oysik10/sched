@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from "react-native";
 import { collection, doc, onSnapshot, getDoc, writeBatch } from "firebase/firestore";
 import { firestore, auth } from "../src/firebaseConfig";
 import { router } from "expo-router"; 
-
 
 type Friend = {
   id: string;
@@ -71,7 +70,7 @@ const FriendsScreen = () => {
     return () => { cancelled = true; };
   }, [followers, following, currentUid]);
 
-  // Load incoming requests
+  // Load incoming requests (followers that you are NOT following back)
   useEffect(() => {
     if (!currentUid) return;
 
@@ -117,14 +116,30 @@ const FriendsScreen = () => {
     try { await batch.commit(); } catch (e) { console.warn("Failed to decline:", e); }
   };
 
+  // Unfriend with confirmation: removes both directions so it's no longer mutual
   const unfriend = async (otherUid: string) => {
     if (!currentUid) return;
-    const batch = writeBatch(firestore);
-    batch.delete(doc(firestore, "users", currentUid, "following", otherUid));
-    batch.delete(doc(firestore, "users", otherUid, "followers", currentUid));
-    batch.delete(doc(firestore, "users", otherUid, "following", currentUid));
-    batch.delete(doc(firestore, "users", currentUid, "followers", otherUid));
-    try { await batch.commit(); } catch (e) { console.warn("Failed to unfriend:", e); }
+
+    Alert.alert(
+      "Unfriend",
+      "Are you sure you want to remove this friend?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Unfriend",
+          style: "destructive",
+          onPress: async () => {
+            const batch = writeBatch(firestore);
+            batch.delete(doc(firestore, "users", currentUid, "following", otherUid));
+            batch.delete(doc(firestore, "users", otherUid, "followers", currentUid));
+            batch.delete(doc(firestore, "users", otherUid, "following", currentUid));
+            batch.delete(doc(firestore, "users", currentUid, "followers", otherUid));
+            try { await batch.commit(); }
+            catch (e) { console.warn("Failed to unfriend:", e); }
+          },
+        },
+      ]
+    );
   };
 
   const renderRequestItem = ({ item }: { item: Friend }) => (
@@ -144,17 +159,30 @@ const FriendsScreen = () => {
     </View>
   );
 
-  const renderFriendItem = ({ item }: { item: Friend }) => (
-    <View style={styles.userItem}>
-      <View style={{ flexShrink: 1 }}>
-        <Text style={styles.username} numberOfLines={1}>{item.username || "@unknown"}</Text>
-        <Text style={styles.details} numberOfLines={1}>{(item.firstName || "") + " " + (item.lastName || "")}</Text>
+  // Show "Friends ✓" badge ONLY if mutual (in followers AND following), plus Unfriend button
+  const renderFriendItem = ({ item }: { item: Friend }) => {
+    const isFriends = followers.has(item.id) && following.has(item.id);
+    return (
+      <View style={styles.userItem}>
+        <View style={styles.userTopRow}>
+          <View style={{ flexShrink: 1 }}>
+            <Text style={styles.username} numberOfLines={1}>{item.username || "@unknown"}</Text>
+            <Text style={styles.details} numberOfLines={1}>{(item.firstName || "") + " " + (item.lastName || "")}</Text>
+          </View>
+
+          {isFriends && (
+            <View style={styles.friendsBadge}>
+              <Text style={styles.friendsBadgeText}>Friends ✓</Text>
+            </View>
+          )}
+        </View>
+
+        <TouchableOpacity style={styles.unfriendBtn} onPress={() => unfriend(item.id)}>
+          <Text style={styles.unfriendText}>Unfriend</Text>
+        </TouchableOpacity>
       </View>
-      <TouchableOpacity style={styles.unfriendBtn} onPress={() => unfriend(item.id)}>
-        <Text style={styles.unfriendText}>Unfriend</Text>
-      </TouchableOpacity>
-    </View>
-  );
+    );
+  };
 
   if (!currentUid) {
     return (
@@ -167,17 +195,14 @@ const FriendsScreen = () => {
   return (
     <View style={{ flex: 1 }}>
       {/* Header with button */}
-        <View style={styles.headerRow}>
-          <Text style={styles.sectionTitle}>
-            Friend Requests {loadingRequests ? "" : `(${requests.length})`}
-          </Text>
-          <TouchableOpacity
-            onPress={() => router.push("/sentrequests")}
-            style={{ padding: 8 }}
-          >
-            <Text style={styles.sentRequestsBtn}>Sent Requests</Text>
-          </TouchableOpacity>
-        </View>
+      <View style={styles.headerRow}>
+        <Text style={styles.sectionTitle}>
+          Friend Requests {loadingRequests ? "" : `(${requests.length})`}
+        </Text>
+        <TouchableOpacity onPress={() => router.push("/sentrequests")} style={{ padding: 8 }}>
+          <Text style={styles.sentRequestsBtn}>Sent Requests</Text>
+        </TouchableOpacity>
+      </View>
 
       {/* Top quarter: Friend Requests */}
       <View style={styles.requestsContainer}>
@@ -257,27 +282,48 @@ const styles = StyleSheet.create({
   chipText: { fontWeight: "700" },
   acceptText: { color: "#51ff87" },
   declineText: { color: "#f55" },
+
   friendsContainer: { flex: 1, backgroundColor: "#0b0b0b", paddingTop: 6 },
+
+  // Updated layout for friend item with badge + button
   userItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
     backgroundColor: "#1a1a1a",
     padding: 14,
     marginHorizontal: 10,
     marginVertical: 6,
     borderRadius: 8,
+  },
+  userTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
   },
+
+  // Green "Friends ✓" badge
+  friendsBadge: {
+    backgroundColor: "#16351f",
+    borderColor: "#3cab5b",
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  friendsBadgeText: { color: "#3cab5b", fontSize: 12, fontWeight: "700" },
+
   username: { color: "#4f8ef7", fontSize: 16, fontWeight: "600" },
   details: { color: "#ccc", fontSize: 14, marginTop: 2 },
+
   emptyText: { textAlign: "center", color: "#888", marginTop: 20 },
   center: { flex: 1, justifyContent: "center", alignItems: "center", padding: 24 },
+
   unfriendBtn: {
+    marginTop: 10,
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 6,
     borderWidth: 1,
     borderColor: "#f55",
+    alignSelf: "flex-start",
   },
   unfriendText: { color: "#f55", fontWeight: "600" },
 });

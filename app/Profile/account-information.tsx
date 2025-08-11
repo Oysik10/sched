@@ -9,10 +9,10 @@ import {
   TouchableOpacity,
   Image,
   Platform,
+  Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import {
-  getAuth,
   updatePassword,
   reauthenticateWithCredential,
   EmailAuthProvider,
@@ -28,28 +28,47 @@ import {
   getDocs,
   deleteDoc,
 } from 'firebase/firestore';
-import { db } from '../../src/firebaseConfig';
+import { db, auth } from '../../src/firebaseConfig';
 import { router } from 'expo-router';
 
 const USERNAME_RE = /^[a-z0-9._]{3,20}$/; // 3–20 chars, lowercase, digits, dot, underscore
+const PASSWORD_RE = /^(?=.*[A-Z])(?=.*\d).{9,}$/; // >8 chars (min 9), at least one uppercase & one number
+
+// --- helpers for “username not similar to name” ---
+const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+const nameTokens = (fullName: string) =>
+  fullName
+    .toLowerCase()
+    .split(/\s+/)
+    .map(t => t.replace(/[^a-z0-9]/g, ''))
+    .filter(t => t.length >= 3);
+
+const isUsernameTooSimilarToName = (handle: string, fullName: string) => {
+  const h = normalize(handle);
+  const tokens = nameTokens(fullName);
+  // block if username contains any name token (≥3 chars)
+  return tokens.some(t => h.includes(t));
+};
 
 const AccountInformation = () => {
-  const auth = getAuth();
   const [user, setUser] = useState(auth.currentUser);
 
-  const [name, setName] = useState('');
+  const [name, setName] = useState(''); // read-only display
   const [username, setUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [currentPassword, setCurrentPassword] = useState('');
   const [photoURL, setPhotoURL] = useState('');
   const [loading, setLoading] = useState(false);
   const [usernameAvailable, setUsernameAvailable] = useState<null | boolean>(null);
+
+  // Password modal state
+  const [pwModalVisible, setPwModalVisible] = useState(false);
+  const [pwInput, setPwInput] = useState('');
 
   // keep user in sync across auth state changes
   useEffect(() => {
     const unsub = auth.onAuthStateChanged(setUser);
     return unsub;
-  }, [auth]);
+  }, []);
 
   // Load profile
   useEffect(() => {
@@ -62,7 +81,8 @@ const AccountInformation = () => {
         if (!userDoc.exists()) return;
 
         const data = userDoc.data() as any;
-        setName(`${data.firstName || ''} ${data.lastName || ''}`.trim());
+        const fullName = `${data.firstName || ''} ${data.lastName || ''}`.trim();
+        setName(fullName);
         setUsername((data.username || '').toLowerCase());
         setPhotoURL(data.photoURL || '');
       } catch (e: any) {
@@ -73,17 +93,13 @@ const AccountInformation = () => {
     loadUserData();
   }, [user]);
 
-  // Debounced username availability
+  // Debounced username availability + similarity check
   useEffect(() => {
     let cancelled = false;
 
     const checkAvailability = async () => {
       const handle = username.trim().toLowerCase();
-      if (!handle) {
-        setUsernameAvailable(null);
-        return;
-      }
-      if (!USERNAME_RE.test(handle)) {
+      if (!handle || !USERNAME_RE.test(handle)) {
         setUsernameAvailable(null);
         return;
       }
@@ -91,10 +107,9 @@ const AccountInformation = () => {
       try {
         const q = query(collection(db, 'users'), where('username', '==', handle));
         const snapshot = await getDocs(q);
-        // if a doc exists but it's your own UID, it's still available to you
         const isTaken = snapshot.docs.some((d) => d.id !== user?.uid);
         if (!cancelled) setUsernameAvailable(!isTaken);
-      } catch (e) {
+      } catch {
         if (!cancelled) setUsernameAvailable(null);
       }
     };
@@ -133,13 +148,12 @@ const AccountInformation = () => {
       return;
     }
 
-    if (!name.trim() || !username.trim()) {
-      Alert.alert('Error', 'Please fill in all fields.');
+    // validate username rules
+    const handle = username.trim().toLowerCase();
+    if (!handle) {
+      Alert.alert('Error', 'Username is required.');
       return;
     }
-
-    // normalize username
-    const handle = username.trim().toLowerCase();
     if (!USERNAME_RE.test(handle)) {
       Alert.alert(
         'Invalid username',
@@ -147,42 +161,54 @@ const AccountInformation = () => {
       );
       return;
     }
-
+    if (isUsernameTooSimilarToName(handle, name)) {
+      Alert.alert('Invalid username', 'Username must not be similar to your name.');
+      return;
+    }
     if (usernameAvailable === false) {
       Alert.alert('Error', 'Username is already taken.');
       return;
     }
 
-    // If changing password, ensure currentPassword provided and email exists
+    // validate password rules if changing
     const wantsPasswordChange = Boolean(newPassword);
-    if (wantsPasswordChange && !currentPassword) {
-      Alert.alert('Missing password', 'Please enter your current password.');
-      return;
-    }
-    if (wantsPasswordChange && !user.email) {
-      Alert.alert(
-        'Unsupported for this account',
-        'This account does not have an email/password sign-in method.'
-      );
-      return;
+    if (wantsPasswordChange) {
+      if (!user.email) {
+        Alert.alert(
+          'Unsupported for this account',
+          'This account does not have an email/password sign-in method.'
+        );
+        return;
+      }
+      if (!PASSWORD_RE.test(newPassword)) {
+        Alert.alert(
+          'Weak password',
+          'Password must be more than 8 characters (min 9), include at least one uppercase letter and one number.'
+        );
+        return;
+      }
     }
 
+    // Show password modal for re-auth (email/password accounts)
+    if (user.email) {
+      setPwInput('');
+      setPwModalVisible(true);
+    } else {
+      // OAuth-only: just update username/photo
+      await performUpdateWithoutReauth(handle);
+    }
+  };
+
+  const performUpdateWithoutReauth = async (normalizedHandle: string) => {
     setLoading(true);
     try {
-      // Update profile fields in Firestore
-      await updateDoc(doc(db, 'users', user.uid), {
-        name: name.trim(),
-        username: handle,
+      await updateDoc(doc(db, 'users', user!.uid), {
+        username: normalizedHandle,
         photoURL,
       });
-
-      if (wantsPasswordChange) {
-        const cred = EmailAuthProvider.credential(user.email!, currentPassword);
-        await reauthenticateWithCredential(user, cred);
-        await updatePassword(user, newPassword);
-        Alert.alert('Success', 'Password updated.');
+      if (newPassword) {
+        Alert.alert('Note', 'Password cannot be changed for this sign-in method.');
       }
-
       Alert.alert('Success', 'Profile updated.');
     } catch (error: any) {
       Alert.alert('Error', error?.message || 'Please try again.');
@@ -191,7 +217,45 @@ const AccountInformation = () => {
     }
   };
 
-  // Delete account flow (with password prompt for email/password users)
+  const performUpdateWithPassword = async () => {
+    if (!user) return;
+    if (!user.email) {
+      setPwModalVisible(false);
+      await performUpdateWithoutReauth(username.trim().toLowerCase());
+      return;
+    }
+    const currentPassword = pwInput;
+    if (!currentPassword) return;
+
+    const normalizedHandle = username.trim().toLowerCase();
+
+    setLoading(true);
+    try {
+      // re-authenticate
+      const cred = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, cred);
+
+      // update Firestore profile
+      await updateDoc(doc(db, 'users', user.uid), {
+        username: normalizedHandle,
+        photoURL,
+      });
+
+      // update password if requested
+      if (newPassword) {
+        await updatePassword(user, newPassword);
+        Alert.alert('Success', 'Password updated.');
+      }
+
+      Alert.alert('Success', 'Profile updated.');
+      setPwModalVisible(false);
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const promptDeleteWithPassword = () => {
     if (!user) {
       Alert.alert('Session expired', 'Please sign in again.');
@@ -217,7 +281,6 @@ const AccountInformation = () => {
         'secure-text'
       );
     } else {
-      // Simple fallback for Android/web where Alert.prompt isn’t available
       Alert.alert(
         'Delete Account',
         'Password re-authentication is required. Please go to Settings > Security to re-authenticate, then try again.',
@@ -227,7 +290,7 @@ const AccountInformation = () => {
   };
 
   const actuallyDeleteAccount = async (password: string) => {
-    const current = getAuth().currentUser;
+    const current = auth.currentUser;
     if (!current) {
       Alert.alert('Session expired', 'Please sign in again.');
       router.replace('/');
@@ -242,11 +305,8 @@ const AccountInformation = () => {
       setLoading(true);
       const cred = EmailAuthProvider.credential(current.email, password);
       await reauthenticateWithCredential(current, cred);
-
-      // Delete Firestore doc first, then Auth user
       await deleteDoc(doc(db, 'users', current.uid));
       await deleteUser(current);
-
       Alert.alert('Deleted', 'Your account has been deleted.');
       router.replace('../..');
     } catch (error: any) {
@@ -256,9 +316,15 @@ const AccountInformation = () => {
     }
   };
 
+  // live hints for validation
+  const handle = username.trim().toLowerCase();
+  const usernameSimilar = handle ? isUsernameTooSimilarToName(handle, name) : false;
+  const passwordValid = newPassword ? PASSWORD_RE.test(newPassword) : true;
+
   return (
     <View style={styles.container}>
-      <View style={styles.profileSection}>
+      {/* Profile / avatar */}
+      <View className="profileSection" style={styles.profileSection}>
         <Image
           source={photoURL ? { uri: photoURL } : require('../../assets/avatar-placeholder.png')}
           style={styles.avatar}
@@ -273,14 +339,13 @@ const AccountInformation = () => {
         </View>
       </View>
 
+      {/* Name (read-only) */}
       <Text style={styles.label}>Name</Text>
-      <TextInput
-        style={styles.input}
-        value={name}
-        onChangeText={setName}
-        placeholder="Enter your name"
-      />
+      <View style={styles.readonlyBox}>
+        <Text style={styles.readonlyText}>{name || 'Unnamed'}</Text>
+      </View>
 
+      {/* Username */}
       <Text style={styles.label}>Username</Text>
       <View style={styles.usernameRow}>
         <Text style={styles.at}>@</Text>
@@ -291,7 +356,7 @@ const AccountInformation = () => {
           placeholder="Choose a username"
           autoCapitalize="none"
         />
-        {username.length > 0 && usernameAvailable !== null && (
+        {username.length > 0 && usernameAvailable !== null && !usernameSimilar && (
           <Text style={[styles.icon, usernameAvailable ? styles.valid : styles.invalid]}>
             {usernameAvailable ? '✓' : '✗'}
           </Text>
@@ -302,7 +367,13 @@ const AccountInformation = () => {
           Use 3–20 characters: lowercase letters, numbers, dot, or underscore.
         </Text>
       )}
+      {username.length > 0 && usernameSimilar && (
+        <Text style={{ color: '#F44336', marginTop: 4 }}>
+          Username must not be similar to your name.
+        </Text>
+      )}
 
+      {/* New Password */}
       <Text style={styles.label}>New Password</Text>
       <TextInput
         style={styles.input}
@@ -311,15 +382,11 @@ const AccountInformation = () => {
         placeholder="Leave blank to keep current"
         secureTextEntry
       />
-
-      <Text style={styles.label}>Current Password</Text>
-      <TextInput
-        style={styles.input}
-        value={currentPassword}
-        onChangeText={setCurrentPassword}
-        placeholder="Required for password change or delete"
-        secureTextEntry
-      />
+      {newPassword.length > 0 && !passwordValid && (
+        <Text style={{ color: '#F44336', marginTop: 4 }}>
+          Password must be more than 8 characters (min 9) and include at least one uppercase letter and one number.
+        </Text>
+      )}
 
       {loading ? (
         <ActivityIndicator size="large" style={{ marginTop: 20 }} />
@@ -334,6 +401,37 @@ const AccountInformation = () => {
           </TouchableOpacity>
         </>
       )}
+
+      {/* Password modal for re-auth (cross-platform) */}
+      <Modal
+        transparent
+        visible={pwModalVisible}
+        animationType="fade"
+        onRequestClose={() => setPwModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Confirm Password</Text>
+            <Text style={styles.modalDesc}>Enter your current password to update your account.</Text>
+            <TextInput
+              style={styles.input}
+              value={pwInput}
+              onChangeText={setPwInput}
+              placeholder="Current password"
+              secureTextEntry
+              autoFocus
+            />
+            <View style={styles.modalRow}>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalCancel]} onPress={() => setPwModalVisible(false)}>
+                <Text style={styles.modalBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, styles.modalConfirm]} onPress={performUpdateWithPassword}>
+                <Text style={[styles.modalBtnText, { color: '#fff' }]}>Confirm</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -365,12 +463,25 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 14,
   },
+
   label: {
     fontSize: 15,
     marginBottom: 4,
     marginTop: 12,
     fontWeight: '500',
   },
+  readonlyBox: {
+    borderWidth: 1,
+    borderColor: '#eee',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#fafafa',
+  },
+  readonlyText: {
+    fontSize: 16,
+    color: '#333',
+  },
+
   input: {
     borderWidth: 1,
     borderColor: '#ddd',
@@ -394,6 +505,7 @@ const styles = StyleSheet.create({
   },
   valid: { color: '#4CAF50' },
   invalid: { color: '#F44336' },
+
   updateButton: {
     backgroundColor: '#3478f6',
     padding: 14,
@@ -412,6 +524,53 @@ const styles = StyleSheet.create({
     color: 'white',
     fontWeight: '600',
     fontSize: 16,
+  },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+  },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  modalDesc: {
+    fontSize: 14,
+    color: '#444',
+    marginBottom: 10,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 12,
+  },
+  modalBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  modalCancel: {
+    backgroundColor: '#eee',
+  },
+  modalConfirm: {
+    backgroundColor: '#3478f6',
+  },
+  modalBtnText: {
+    color: '#111',
+    fontWeight: '600',
   },
 });
 
