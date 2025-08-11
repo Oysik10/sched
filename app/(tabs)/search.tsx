@@ -129,8 +129,11 @@ export default function SearchUsersScreen() {
           style={styles.input}
           placeholder="Enter username"
           placeholderTextColor="#888"
+          autoCapitalize="none" // prevents iOS from auto-capitalizing
           value={search}
-          onChangeText={(text) => setSearch(text.replace(/\s/g, ''))} // no spaces
+          onChangeText={(text) =>
+            setSearch(text.replace(/\s/g, '').toLowerCase()) // no spaces + lowercase
+          }
           onSubmitEditing={handleSearch}
         />
       </View>
