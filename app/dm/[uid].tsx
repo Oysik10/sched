@@ -8,14 +8,16 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
   addDoc, collection, doc, getDoc, onSnapshot,
-  orderBy, query, serverTimestamp
+  orderBy, query, serverTimestamp, setDoc
 } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 type Msg = {
   id: string;
   text: string;
   senderId: string;
-  timestamp?: any;
+  createdAt: number;          // client ms timestamp for reliable sorting
+  timestamp?: any;            // server timestamp for backend truth / rules
 };
 
 function threadIdFor(a: string, b: string) {
@@ -27,6 +29,7 @@ export default function DMScreen() {
   const rawParam = useLocalSearchParams().uid as string | string[] | undefined;
   const otherUid = Array.isArray(rawParam) ? rawParam[0] : (rawParam ?? '');
 
+  const [uid, setUid] = useState<string>('');                   // <- auth-ready uid
   const [messages, setMessages] = useState<Msg[]>([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -34,8 +37,15 @@ export default function DMScreen() {
   const [otherProfile, setOtherProfile] = useState<{ username?: string; firstName?: string; lastName?: string } | null>(null);
   const flatRef = useRef<FlatList>(null);
 
-  const me = auth.currentUser?.uid ?? '';
-  const threadId = useMemo(() => (me && otherUid ? threadIdFor(me, otherUid) : ''), [me, otherUid]);
+  // Wait for auth to be ready
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (user) => {
+      setUid(user?.uid ?? '');
+    });
+    return unsub;
+  }, []);
+
+  const threadId = useMemo(() => (uid && otherUid ? threadIdFor(uid, otherUid) : ''), [uid, otherUid]);
 
   // Load other user's profile
   useEffect(() => {
@@ -45,44 +55,85 @@ export default function DMScreen() {
         const uref = doc(firestore, 'users', otherUid);
         const snap = await getDoc(uref);
         setOtherProfile(snap.exists() ? (snap.data() as any) : {});
-      } catch {
+      } catch (e) {
+        console.warn('Profile load failed:', e);
         setOtherProfile({});
       }
     })();
   }, [otherUid]);
 
-  // Stream messages
+  // Ensure thread doc exists (helps with rules & metadata)
   useEffect(() => {
     if (!threadId) return;
-    const q = query(collection(firestore, 'dms', threadId, 'items'), orderBy('timestamp', 'asc'));
+    (async () => {
+      try {
+        const tref = doc(firestore, 'dms', threadId);
+        await setDoc(
+          tref,
+          {
+            participants: [uid, otherUid].sort(),
+            updatedAt: serverTimestamp(),
+            updatedAtMs: Date.now(),  
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        console.warn('Create/merge thread failed:', e);
+      }
+    })();
+  }, [threadId, uid, otherUid]);
+
+  // Stream messages (order by client createdAt to avoid null serverTimestamp issues)
+  useEffect(() => {
+    if (!threadId) return;
+    const q = query(
+      collection(firestore, 'dms', threadId, 'items'),
+      orderBy('createdAt', 'asc')
+    );
+
     const unsub = onSnapshot(
       q,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
         setMessages(list);
         setLoading(false);
-        setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
+        // scroll after data in case list grew
+        requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
       },
-      () => setLoading(false)
+      (err) => {
+        console.warn('Message stream error:', err);
+        setLoading(false);
+      }
     );
     return unsub;
   }, [threadId]);
 
   const send = async () => {
     const trimmed = text.trim();
-    const user = auth.currentUser; // fresh check
-    if (!trimmed || !user || !threadId) return;
+    if (!trimmed || !uid || !threadId) return;
 
     try {
       setSending(true);
+      const now = Date.now();
+
+      // write message
       await addDoc(collection(firestore, 'dms', threadId, 'items'), {
         text: trimmed,
-        senderId: user.uid,
-        timestamp: serverTimestamp(),
+        senderId: uid,
+        createdAt: now,              // used for ordering
+        timestamp: serverTimestamp() // canonical time
       });
+
+      // update thread "updatedAt" so inbox lists can sort
+      await setDoc(
+        doc(firestore, 'dms', threadId),
+        { lastMessage: trimmed, lastSenderId: uid, updatedAt: serverTimestamp(), updatedAtMs: Date.now() },
+        { merge: true }
+      );
+
       setText('');
       // scroll after send
-      setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 50);
+      requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
     } catch (e) {
       console.warn('DM send failed:', e);
     } finally {
@@ -95,7 +146,7 @@ export default function DMScreen() {
     [otherProfile?.firstName, otherProfile?.lastName].filter(Boolean).join(' ') ||
     'Chat';
 
-  if (!me || !otherUid) {
+  if (!uid || !otherUid) {
     return (
       <View style={[styles.container, styles.center]}>
         <Text style={{ color: '#888' }}>Sign in to chat.</Text>
@@ -134,7 +185,7 @@ export default function DMScreen() {
         data={messages}
         keyExtractor={(m) => m.id}
         renderItem={({ item }) => {
-          const mine = item.senderId === me;
+          const mine = item.senderId === uid;
           return (
             <View style={[styles.bubble, mine ? styles.mine : styles.theirs]}>
               <Text style={styles.text}>{item.text}</Text>

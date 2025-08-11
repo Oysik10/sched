@@ -20,21 +20,15 @@ import {
   where,
   getDocs,
 } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import { router } from 'expo-router';
 
-const CHAT_ID = 'global';
-
-type Msg = {
+type Thread = {
   id: string;
-  text: string;
-  senderId: string;
-  timestamp?: any; // Firestore Timestamp
-};
-
-type SenderPreview = {
-  senderId: string;
-  lastText: string;
-  lastAt?: number; // millis
+  participants: string[];
+  lastMessage?: string;
+  lastSenderId?: string;
+  updatedAt?: any; // Firestore Timestamp
 };
 
 type UserHit = {
@@ -45,63 +39,75 @@ type UserHit = {
 };
 
 export default function ChatScreen() {
-  const me = auth.currentUser?.uid ?? null;
+  // Auth-ready uid (don’t rely on auth.currentUser immediately)
+  const [uid, setUid] = useState<string>('');
 
-  const [messages, setMessages] = useState<Msg[]>([]);
+  // Inbox threads
+  const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Profile cache for display names
   const [profiles, setProfiles] = useState<
     Record<string, { username?: string; firstName?: string; lastName?: string }>
   >({});
 
-  // search state
+  // Search state
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<UserHit[]>([]);
 
-  // Subscribe to all messages in the room
+  // Auth subscribe
   useEffect(() => {
-    const q = query(collection(firestore, 'messages', CHAT_ID, 'items'), orderBy('timestamp', 'asc'));
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
-        setMessages(list);
-        setLoading(false);
-      },
-      () => setLoading(false)
-    );
+    const unsub = onAuthStateChanged(auth, (user) => setUid(user?.uid ?? ''));
     return unsub;
   }, []);
 
-  // Compute the latest message per sender
-  const previews: SenderPreview[] = useMemo(() => {
-    const map = new Map<string, SenderPreview>();
-    for (const m of messages) {
-      const t = m.timestamp?.toMillis ? m.timestamp.toMillis() : 0;
-      const prev = map.get(m.senderId);
-      if (!prev || t >= (prev.lastAt ?? -1)) {
-        map.set(m.senderId, { senderId: m.senderId, lastText: m.text, lastAt: t });
+  // Subscribe to my DM threads in real time
+  useEffect(() => {
+    if (!uid) return;
+    // Query: all threads where I'm a participant, newest first
+    const q = query(
+      collection(firestore, 'dms'),
+      where('participants', 'array-contains', uid),
+      orderBy('updatedAtMs', 'desc')
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Thread[];
+        setThreads(list);
+        setLoading(false);
+      },
+      (e) => {
+        console.warn('Inbox stream error:', e);
+        setLoading(false);
+      }
+    );
+    return unsub;
+  }, [uid]);
+
+  // Fetch profiles for “other” participant(s) we don’t know yet
+  useEffect(() => {
+    if (!uid || threads.length === 0) return;
+    const needed = new Set<string>();
+    for (const t of threads) {
+      for (const p of t.participants || []) {
+        if (p !== uid && !(p in profiles)) needed.add(p);
       }
     }
-    return Array.from(map.values()).sort((a, b) => (b.lastAt ?? 0) - (a.lastAt ?? 0));
-  }, [messages]);
-
-  // Fetch profiles for any sender we don't know yet
-  useEffect(() => {
-    const unknown = previews.map((p) => p.senderId).filter((id) => !(id in profiles));
-    if (unknown.length === 0) return;
+    if (needed.size === 0) return;
 
     let cancelled = false;
     (async () => {
       const found: Record<string, any> = {};
       await Promise.all(
-        unknown.map(async (uid) => {
+        Array.from(needed).map(async (pid) => {
           try {
-            const uref = doc(firestore, 'users', uid);
+            const uref = doc(firestore, 'users', pid);
             const snap = await getDoc(uref);
-            found[uid] = snap.exists() ? snap.data() : {};
+            found[pid] = snap.exists() ? snap.data() : {};
           } catch {
-            found[uid] = {};
+            found[pid] = {};
           }
         })
       );
@@ -111,17 +117,17 @@ export default function ChatScreen() {
     return () => {
       cancelled = true;
     };
-  }, [previews, profiles]);
+  }, [threads, uid, profiles]);
 
-  const displayName = (uid: string) => {
-    if (uid === me) return 'You';
-    const p = profiles[uid] || {};
+  const displayName = (pid: string) => {
+    if (pid === uid) return 'You';
+    const p = profiles[pid] || {};
     if (p.username) return `@${p.username}`;
     const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
     return name || 'Unknown';
   };
 
-  // ---- Search users by @username (debounced) ----
+  // -------- Username search (unchanged, debounced) --------
   useEffect(() => {
     const term = search.trim().replace(/^@/, '').toLowerCase();
     if (!term) {
@@ -135,7 +141,6 @@ export default function ChatScreen() {
     const t = setTimeout(async () => {
       try {
         const usersRef = collection(firestore, 'users');
-        // username prefix query
         const q = query(
           usersRef,
           where('username', '>=', term),
@@ -156,36 +161,42 @@ export default function ChatScreen() {
       clearTimeout(t);
     };
   }, [search]);
-  // -----------------------------------------------
+  // --------------------------------------------------------
 
-  const renderPreview = ({ item }: { item: SenderPreview }) => (
-    <TouchableOpacity
-      style={styles.row}
-      activeOpacity={0.7}
-      onPress={() => router.push(`/dm/${item.senderId}`)}
-    >
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>
-          {displayName(item.senderId).replace(/^@/, '').slice(0, 1).toUpperCase()}
-        </Text>
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.name} numberOfLines={1}>
-          {displayName(item.senderId)}
-        </Text>
-        <Text style={styles.lastText} numberOfLines={1}>
-          {item.lastText}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
-
-    const renderUser = ({ item }: { item: UserHit }) => (
+  // Render a single thread row (other user’s name + last message)
+  const renderThread = ({ item }: { item: Thread }) => {
+    const otherId = (item.participants || []).find((p) => p !== uid) || '';
+    const lastText = item.lastMessage || '—';
+    return (
       <TouchableOpacity
         style={styles.row}
         activeOpacity={0.7}
-        onPress={() => router.push(`/dm/${item.id}`)}  // ✅ use id
+        onPress={() => router.push(`/dm/${otherId}`)}
       >
+        <View style={styles.avatar}>
+          <Text style={styles.avatarText}>
+            {displayName(otherId).replace(/^@/, '').slice(0, 1).toUpperCase()}
+          </Text>
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.name} numberOfLines={1}>
+            {displayName(otherId)}
+          </Text>
+          <Text style={styles.lastText} numberOfLines={1}>
+            {lastText}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  // Render a user search hit
+  const renderUser = ({ item }: { item: UserHit }) => (
+    <TouchableOpacity
+      style={styles.row}
+      activeOpacity={0.7}
+      onPress={() => router.push(`/dm/${item.id}`)}
+    >
       <View style={styles.avatar}>
         <Text style={styles.avatarText}>
           {(item.username?.[0] || item.firstName?.[0] || '?').toUpperCase()}
@@ -202,7 +213,7 @@ export default function ChatScreen() {
     </TouchableOpacity>
   );
 
-  if (loading) {
+  if (!uid || loading) {
     return (
       <View style={[styles.container, styles.center]}>
         <ActivityIndicator />
@@ -229,29 +240,31 @@ export default function ChatScreen() {
         />
       </View>
 
-      {/* Results / Previews */}
+      {/* Results / Threads */}
       {showSearchResults ? (
         searching ? (
           <View style={styles.center}><ActivityIndicator /></View>
         ) : results.length === 0 ? (
           <View style={styles.center}><Text style={{ color: '#888' }}>No users found.</Text></View>
         ) : (
-        <FlatList<UserHit>
-          data={results}
-          keyExtractor={(i) => i.id}           // ✅ id for user hits
-          renderItem={renderUser}
-        />
+          <FlatList
+            data={results}
+            keyExtractor={(i) => i.id}
+            renderItem={renderUser}
+            contentContainerStyle={{ paddingHorizontal: 12 }}
+          />
         )
-      ) : previews.length === 0 ? (
+      ) : threads.length === 0 ? (
         <View style={styles.center}>
           <Text style={{ color: '#888' }}>No messages yet.</Text>
         </View>
       ) : (
-      <FlatList<SenderPreview>
-        data={previews}
-        keyExtractor={(i) => i.senderId}     // ✅ senderId for previews
-        renderItem={renderPreview}
-      />
+        <FlatList
+          data={threads}
+          keyExtractor={(t) => t.id}
+          renderItem={renderThread}
+          contentContainerStyle={{ paddingHorizontal: 12 }}
+        />
       )}
     </View>
   );
