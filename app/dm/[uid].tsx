@@ -144,6 +144,24 @@ export default function DMScreen() {
         { lastMessage: trimmed, lastSenderId: uid, updatedAt: serverTimestamp(), updatedAtMs: Date.now() },
         { merge: true }
       );
+      
+      await setDoc(
+        doc(firestore, 'dms', threadId),
+        {
+          lastMessage: trimmed,
+          lastSenderId: uid,
+          updatedAt: serverTimestamp(),
+          updatedAtMs: now, // use the same "now"
+          lastActivity: {
+            type: 'message',
+            actorId: uid,
+            text: trimmed,
+            atMs: now,
+          },
+        },
+        { merge: true }
+      );
+
 
       setText('');
       setPickerOpen(false);
@@ -186,14 +204,25 @@ export default function DMScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length]);
 
-  const removeMyReaction = async (msg: Msg) => {
+const removeMyReaction = async (msg: Msg) => {
   if (!uid || !threadId) return;
   const mine = msg.reactions?.[uid];
-  if (!mine) return; // nothing to remove
+  if (!mine) return;
+
   try {
     setRemoving(true);
+    const now = Date.now();
     const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
+
     await updateDoc(mref, { [`reactions.${uid}`]: deleteField() });
+
+    // ⬇️ Clear lastActivity so the preview disappears immediately
+    await updateDoc(doc(firestore, 'dms', threadId), {
+      updatedAt: serverTimestamp(),
+      updatedAtMs: now,
+      lastActivity: deleteField(),
+    });
+
     setReactionDetailsFor(null);
   } catch (e) {
     console.warn('Remove reaction failed:', e);
@@ -203,25 +232,54 @@ export default function DMScreen() {
 };
 
   // --- Reactions ---
-  const toggleReaction = async (msg: Msg, emoji: string) => {
-    if (!uid || !threadId) return;
-    try {
-      const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
-      const current = msg.reactions || {};
-      const mine = current[uid];
+const toggleReaction = async (msg: Msg, emoji: string) => {
+  if (!uid || !threadId) return;
+  try {
+    const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
+    const current = msg.reactions || {};
+    const mine = current[uid];
+    const now = Date.now();
 
-      if (mine === emoji) {
-        // remove my reaction
-        await updateDoc(mref, { [`reactions.${uid}`]: deleteField() });
-      } else {
-        // set/replace my reaction
-        await updateDoc(mref, { [`reactions.${uid}`]: emoji });
-      }
-      setReactingTo(null);
-    } catch (e) {
-      console.warn('Reaction failed:', e);
+    if (mine === emoji) {
+      await updateDoc(mref, { [`reactions.${uid}`]: deleteField() });
+      // If you prefer, you can decide whether to clear lastActivity only when it
+      // was *your* reaction to *this* message; simplest is to clear here and let
+      // any future reaction re-set it.
+      await updateDoc(doc(firestore, 'dms', threadId), {
+        updatedAt: serverTimestamp(),
+        updatedAtMs: now,
+        lastActivity: deleteField(),   // ⬅️ make the preview go away
+      });
+    } else {
+      await updateDoc(mref, { [`reactions.${uid}`]: emoji });
+
+      // ⬇️ Drive previews from lastActivity only; include actorId & msgId
+      await setDoc(
+        doc(firestore, 'dms', threadId),
+        {
+          updatedAt: serverTimestamp(),
+          updatedAtMs: now,
+          lastActivity: {
+            type: 'reaction',
+            actorId: uid,
+            emoji,
+            text: msg.text || '',
+            msgId: msg.id,
+            atMs: now,
+          },
+        },
+        { merge: true }
+      );
     }
-  };
+
+    // Do NOT touch lastMessage/lastSenderId for reactions
+    setReactingTo(null);
+  } catch (e) {
+    console.warn('Reaction failed:', e);
+  }
+};
+
+
 
   const renderReactionsSummary = (msg: Msg, mine: boolean) => {
     const values = Object.values(msg.reactions || {});

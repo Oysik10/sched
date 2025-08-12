@@ -29,9 +29,16 @@ type Thread = {
   participants: string[];
   lastMessage?: string;
   lastSenderId?: string;
-  updatedAt?: any;                  // optional Firestore Timestamp
-  updatedAtMs?: number;             // client millis for ordering
-  lastSeen?: Record<string, number>; // { [uid]: millis }
+  updatedAt?: any;
+  updatedAtMs?: number;
+  lastSeen?: Record<string, number>;
+  lastActivity?: {
+    type: 'message' | 'reaction';
+    actorId: string;
+    emoji?: string;
+    text?: string;
+    atMs?: number;
+  };
 };
 
 type UserHit = {
@@ -170,7 +177,19 @@ export default function ChatScreen() {
   // Render a single thread row (other user’s name + last message + unread dot)
   const renderThread = ({ item }: { item: Thread }) => {
     const otherId = (item.participants || []).find((p) => p !== uid) || '';
-    const lastText = item.lastMessage || '—';
+    const makePreview = () => {
+      const act = item.lastActivity;
+      if (act?.type === 'reaction') {
+        const actor = displayName(act.actorId);
+        const em = act.emoji || '❤️';
+        const snippet = (act.text || '').trim();
+        const short = snippet.length > 50 ? snippet.slice(0, 50) + '…' : snippet;
+        return `${actor} reacted ${em} to ${short ? `"${short}"` : 'this message'}`;
+      }
+      // No reaction activity? fall back to lastMessage (a real message)
+      return item.lastMessage || '—';
+    };
+    const lastText = makePreview();
     const lastSeenMine = item.lastSeen?.[uid] ?? 0;
     const updatedMs = item.updatedAtMs ?? 0;
     const unread = item.lastSenderId !== uid && updatedMs > lastSeenMine;
