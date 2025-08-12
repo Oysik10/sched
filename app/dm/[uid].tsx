@@ -80,25 +80,23 @@ export default function DMScreen() {
   }, [otherUid]);
 
   // Ensure thread doc exists (helps with rules & metadata)
-  useEffect(() => {
-    if (!threadId) return;
-    (async () => {
-      try {
-        const tref = doc(firestore, 'dms', threadId);
-        await setDoc(
-          tref,
-          {
-            participants: [uid, otherUid].sort(),
-            updatedAt: serverTimestamp(),
-            updatedAtMs: Date.now(),
-          },
-          { merge: true }
-        );
-      } catch (e) {
-        console.warn('Create/merge thread failed:', e);
-      }
-    })();
-  }, [threadId, uid, otherUid]);
+    useEffect(() => {
+      if (!threadId) return;
+      (async () => {
+        try {
+          const tref = doc(firestore, 'dms', threadId);
+          // ❌ don't touch updatedAt/updatedAtMs here
+          await setDoc(
+            tref,
+            { participants: [uid, otherUid].sort() },
+            { merge: true }
+          );
+        } catch (e) {
+          console.warn('Create/merge thread failed:', e);
+        }
+      })();
+    }, [threadId, uid, otherUid]);
+
 
   // Stream messages
   useEffect(() => {
@@ -141,17 +139,12 @@ export default function DMScreen() {
 
       await setDoc(
         doc(firestore, 'dms', threadId),
-        { lastMessage: trimmed, lastSenderId: uid, updatedAt: serverTimestamp(), updatedAtMs: Date.now() },
-        { merge: true }
-      );
-      
-      await setDoc(
-        doc(firestore, 'dms', threadId),
         {
           lastMessage: trimmed,
           lastSenderId: uid,
+          lastMessageAtMs: now,           // ⬅️ new: for unread logic
           updatedAt: serverTimestamp(),
-          updatedAtMs: now, // use the same "now"
+          updatedAtMs: now,               // keep for sorting
           lastActivity: {
             type: 'message',
             actorId: uid,
@@ -162,7 +155,6 @@ export default function DMScreen() {
         { merge: true }
       );
 
-
       setText('');
       setPickerOpen(false);
       requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
@@ -172,6 +164,7 @@ export default function DMScreen() {
       setSending(false);
     }
   };
+
 
   // --- Mark thread as read (clock-skew safe) ---
   const markThreadRead = async () => {

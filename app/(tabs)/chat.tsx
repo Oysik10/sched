@@ -177,6 +177,7 @@ export default function ChatScreen() {
   // Render a single thread row (other user’s name + last message + unread dot)
   const renderThread = ({ item }: { item: Thread }) => {
     const otherId = (item.participants || []).find((p) => p !== uid) || '';
+
     const makePreview = () => {
       const act = item.lastActivity;
       if (act?.type === 'reaction') {
@@ -186,17 +187,18 @@ export default function ChatScreen() {
         const short = snippet.length > 50 ? snippet.slice(0, 50) + '…' : snippet;
         return `${actor} reacted ${em} to ${short ? `"${short}"` : 'this message'}`;
       }
-      // No reaction activity? fall back to lastMessage (a real message)
       return item.lastMessage || '—';
     };
+
     const lastText = makePreview();
+
     const lastSeenMine = item.lastSeen?.[uid] ?? 0;
-    const updatedMs = item.updatedAtMs ?? 0;
-    const unread = item.lastSenderId !== uid && updatedMs > lastSeenMine;
+    const lastMsgMs = (item as any).lastMessageAtMs ?? 0;  // ⬅️ use message time
+    const unread = item.lastSenderId !== uid && lastMsgMs > lastSeenMine;
 
     const handleOpenThread = async () => {
       try {
-        // ✅ Mark as read before navigating so the blue dot disappears
+        // Stamp read against "message time" horizon
         await updateDoc(doc(firestore, 'dms', item.id), {
           [`lastSeen.${uid}`]: Date.now(),
         });
@@ -205,6 +207,7 @@ export default function ChatScreen() {
       }
       router.push(`/dm/${otherId}`);
     };
+
 
     return (
       <TouchableOpacity
