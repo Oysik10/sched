@@ -7,7 +7,8 @@ import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
   addDoc, collection, doc, getDoc, onSnapshot,
-  orderBy, query, serverTimestamp, setDoc, updateDoc, deleteField
+  orderBy, query, serverTimestamp, setDoc, updateDoc, deleteField,
+  limitToLast, endBefore, limit, getDocs
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 
@@ -42,6 +43,10 @@ export default function DMScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [reactingTo, setReactingTo] = useState<string | null>(null);
   const flatRef = useRef<FlatList>(null);
+  const PAGE = 40;                         // how many per page
+  const [oldestCursor, setOldestCursor] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
   const getDisplayName = (u: string) => {
   if (u === uid) return 'You';
@@ -103,7 +108,8 @@ export default function DMScreen() {
     if (!threadId) return;
     const q = query(
       collection(firestore, 'dms', threadId, 'items'),
-      orderBy('createdAt', 'asc')
+      orderBy('createdAt', 'asc'),
+      limitToLast(PAGE)
     );
 
     const unsub = onSnapshot(
@@ -111,6 +117,8 @@ export default function DMScreen() {
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
         setMessages(list);
+        setOldestCursor(list.length ? list[0].createdAt : null);
+        setHasMore(true); // reset; we don't know if history exists yet
         setLoading(false);
         requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
       },
@@ -122,6 +130,7 @@ export default function DMScreen() {
     return unsub;
   }, [threadId]);
 
+
   const send = async () => {
     const trimmed = text.trim();
     if (!trimmed || !uid || !threadId) return;
@@ -129,12 +138,14 @@ export default function DMScreen() {
     try {
       setSending(true);
       const now = Date.now();
+      const expiresAt = new Date(now + 24 * 60 * 60 * 1000); // 24h from now
 
       await addDoc(collection(firestore, 'dms', threadId, 'items'), {
         text: trimmed,
         senderId: uid,
         createdAt: now,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
+        expiresAt, // TTL field on the message
       });
 
       await setDoc(
@@ -142,9 +153,10 @@ export default function DMScreen() {
         {
           lastMessage: trimmed,
           lastSenderId: uid,
-          lastMessageAtMs: now,           // ⬅️ new: for unread logic
+          lastMessageAtMs: now, // for unread logic
           updatedAt: serverTimestamp(),
-          updatedAtMs: now,               // keep for sorting
+          updatedAtMs: now, // for sorting
+          expiresAt, // TTL for the thread
           lastActivity: {
             type: 'message',
             actorId: uid,
@@ -162,6 +174,32 @@ export default function DMScreen() {
       console.warn('DM send failed:', e);
     } finally {
       setSending(false);
+    }
+  };
+
+    const loadOlder = async () => {
+    if (!threadId || !oldestCursor || loadingMore || !hasMore) return;
+    try {
+      setLoadingMore(true);
+      // Get the page BEFORE the current oldest (ASC order, so use endBefore)
+      const olderQ = query(
+        collection(firestore, 'dms', threadId, 'items'),
+        orderBy('createdAt', 'asc'),
+        endBefore(oldestCursor),
+        limitToLast(PAGE)
+      );
+      const snap = await getDocs(olderQ);
+      const older = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
+      if (older.length === 0) {
+        setHasMore(false);
+        return;
+      }
+      setMessages((prev) => [...older, ...prev]); // prepend
+      setOldestCursor(older[0].createdAt);
+    } catch (e) {
+      console.warn('loadOlder failed:', e);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -384,70 +422,76 @@ return (
         </View>
       </View>
     </Modal><KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={80}
-    >
-      <Pressable
-        style={{ flex: 1 }}
-        onPress={() => {
-          if (reactingTo) setReactingTo(null); // tap empty areas to dismiss
-        }}
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity onPress={handleBack} style={{ paddingHorizontal: 10, paddingVertical: 6, width: 100 }}>
-            <Text style={{ color: '#4f8ef7', fontWeight: '700' }}>‹ Back</Text>
-          </TouchableOpacity>
-          <Text style={styles.title} numberOfLines={1}>{displayName}</Text>
-          <View style={{ width: 60 }} />
-        </View>
+  style={styles.container}
+  behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+  keyboardVerticalOffset={80}
+>
+  <View style={{ flex: 1 }}>
+    {/* Tap-catcher overlay: only active when reactingTo is set */}
+    <View
+      pointerEvents={reactingTo ? 'auto' : 'none'}
+      style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, zIndex: 5 }}
+      // Make it tap-only: accept taps, ignore moves (so scroll passes to FlatList)
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => false}
+      onResponderRelease={() => setReactingTo(null)}
+    />
 
-        {/* Messages */}
-        <FlatList
-          ref={flatRef}
-          data={messages}
-          keyExtractor={(m) => m.id}
-          onScrollBeginDrag={() => setReactingTo(null)}
-          keyboardShouldPersistTaps="always"   // let taps go to inner touchables
-          renderItem={({ item }) => {
-            const mine = item.senderId === uid;
-            const showBar = reactingTo === item.id;
-            return (
-              <View style={styles.msgWrapper}>
-                {/* Message bubble */}
-                <TouchableOpacity
-                  activeOpacity={0.8}
-                  onLongPress={() => setReactingTo(showBar ? null : item.id)}
-                  style={[styles.bubble, mine ? styles.mine : styles.theirs]}
-                >
-                  <Text style={styles.text}>{item.text}</Text>
-                </TouchableOpacity>
+    {/* Header */}
+    <View style={styles.header}>
+      <TouchableOpacity onPress={handleBack} style={{ paddingHorizontal: 10, paddingVertical: 6, width: 100 }}>
+        <Text style={{ color: '#4f8ef7', fontWeight: '700' }}>‹ Back</Text>
+      </TouchableOpacity>
+      <Text style={styles.title} numberOfLines={1}>{displayName}</Text>
+      <View style={{ width: 60 }} />
+    </View>
 
-                {/* Reaction summary */}
-                {renderReactionsSummary(item, mine)}
+    {/* Messages */}
+    <FlatList
+      ref={flatRef}
+      data={messages}
+      keyExtractor={(m) => m.id}
+      // Close reaction bar on scroll or tap within list area
+      onScrollBeginDrag={() => setReactingTo(null)}
+      keyboardShouldPersistTaps="always"
+      // Optional: make sure list takes the whole area
+      style={{ flex: 1 }}
+      contentContainerStyle={{ padding: 12 }}
+      scrollEventThrottle={16}
+      renderItem={({ item }) => {
+        const mine = item.senderId === uid;
+        const showBar = reactingTo === item.id;
+        return (
+          <View style={styles.msgWrapper}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onLongPress={() => setReactingTo(showBar ? null : item.id)}
+              style={[styles.bubble, mine ? styles.mine : styles.theirs]}
+            >
+              <Text style={styles.text}>{item.text}</Text>
+            </TouchableOpacity>
 
-                {/* Reaction picker bar BELOW the bubble */}
-                {showBar && (
-                  <View
-                    style={[
-                      styles.reactionBar,
-                      mine ? { alignSelf: 'flex-end', marginTop: 4 } : { alignSelf: 'flex-start', marginTop: 4 },
-                    ]}
-                  >
-                    {REACTION_SET.map((em) => (
-                      <TouchableOpacity key={em} onPress={() => toggleReaction(item, em)} style={styles.reactionBtn}>
-                        <Text style={{ fontSize: 18 }}>{em}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
+            {renderReactionsSummary(item, mine)}
+
+            {showBar && (
+              <View
+                style={[
+                  styles.reactionBar,
+                  mine ? { alignSelf: 'flex-end', marginTop: 4 } : { alignSelf: 'flex-start', marginTop: 4 },
+                ]}
+              >
+                {REACTION_SET.map((em) => (
+                  <TouchableOpacity key={em} onPress={() => toggleReaction(item, em)} style={styles.reactionBtn}>
+                    <Text style={{ fontSize: 18 }}>{em}</Text>
+                  </TouchableOpacity>
+                ))}
               </View>
-            );
-          }}
+            )}
+          </View>
+        );
+      }}
+    />
 
-          contentContainerStyle={{ padding: 12 }}
-        />
         {/* Composer */}
         <View style={styles.inputRow}>
           {/* Toggle emoji row */}
@@ -485,7 +529,7 @@ return (
             </ScrollView>
           </View>
         )}
-    </Pressable>
+      </View>
   </KeyboardAvoidingView></>
   );
 }
