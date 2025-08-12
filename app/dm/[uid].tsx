@@ -1,9 +1,8 @@
 // app/dm/[uid].tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  View, Text, FlatList, TextInput, TouchableOpacity,
-  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator, ScrollView, Modal
-} from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity,
+  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
+  ScrollView, Modal, Pressable } from 'react-native';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
@@ -234,10 +233,18 @@ export default function DMScreen() {
     }, {});
     const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
+    const onPressBadge = () => {
+      if (reactingTo) {
+        setReactingTo(null);
+        setTimeout(() => setReactionDetailsFor(msg), 0);
+      } else {
+        setReactionDetailsFor(msg);
+      }
+    };
     return (
       <TouchableOpacity
         activeOpacity={0.8}
-        onPress={() => setReactionDetailsFor(msg)}
+        onPress={onPressBadge}
         style={[
           styles.reactionsBubble,
           mine ? { right: 6, alignSelf: 'flex-end' } : { left: 6, alignSelf: 'flex-start' },
@@ -251,6 +258,7 @@ export default function DMScreen() {
       </TouchableOpacity>
     );
   };
+
 
 
   const displayName =
@@ -284,15 +292,6 @@ export default function DMScreen() {
 
 return (
   <>
-    {/* Tap anywhere to dismiss the reaction bar */}
-    {reactingTo && (
-      <View
-        pointerEvents="auto"
-        style={styles.dismissOverlay}
-      >
-        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setReactingTo(null)} />
-      </View>
-    )}
 
     <Modal
       visible={!!reactionDetailsFor}
@@ -338,6 +337,12 @@ return (
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={80}
     >
+      <Pressable
+        style={{ flex: 1 }}
+        onPress={() => {
+          if (reactingTo) setReactingTo(null); // tap empty areas to dismiss
+        }}
+      >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity onPress={handleBack} style={{ paddingHorizontal: 10, paddingVertical: 6, width: 100 }}>
@@ -353,23 +358,12 @@ return (
           data={messages}
           keyExtractor={(m) => m.id}
           onScrollBeginDrag={() => setReactingTo(null)}
-          keyboardShouldPersistTaps="handled"
+          keyboardShouldPersistTaps="always"   // let taps go to inner touchables
           renderItem={({ item }) => {
             const mine = item.senderId === uid;
             const showBar = reactingTo === item.id;
             return (
               <View style={styles.msgWrapper}>
-                {/* Reaction picker bar on long-press */}
-                {showBar && (
-                  <View style={[styles.reactionBar, mine ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}>
-                    {REACTION_SET.map((em) => (
-                      <TouchableOpacity key={em} onPress={() => toggleReaction(item, em)} style={styles.reactionBtn}>
-                        <Text style={{ fontSize: 18 }}>{em}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-
                 {/* Message bubble */}
                 <TouchableOpacity
                   activeOpacity={0.8}
@@ -379,14 +373,30 @@ return (
                   <Text style={styles.text}>{item.text}</Text>
                 </TouchableOpacity>
 
-                {/* Reaction summary OVER the top edge of the bubble */}
+                {/* Reaction summary */}
                 {renderReactionsSummary(item, mine)}
+
+                {/* Reaction picker bar BELOW the bubble */}
+                {showBar && (
+                  <View
+                    style={[
+                      styles.reactionBar,
+                      mine ? { alignSelf: 'flex-end', marginTop: 4 } : { alignSelf: 'flex-start', marginTop: 4 },
+                    ]}
+                  >
+                    {REACTION_SET.map((em) => (
+                      <TouchableOpacity key={em} onPress={() => toggleReaction(item, em)} style={styles.reactionBtn}>
+                        <Text style={{ fontSize: 18 }}>{em}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
               </View>
             );
-          } }
+          }}
 
-          contentContainerStyle={{ padding: 12 }} />
-
+          contentContainerStyle={{ padding: 12 }}
+        />
         {/* Composer */}
         <View style={styles.inputRow}>
           {/* Toggle emoji row */}
@@ -424,7 +434,8 @@ return (
             </ScrollView>
           </View>
         )}
-      </KeyboardAvoidingView></>
+    </Pressable>
+  </KeyboardAvoidingView></>
   );
 }
 
@@ -432,14 +443,14 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   
-dismissOverlay: {
-  position: 'absolute',
-  top: 0,
-  right: 0,
-  bottom: 0,
-  left: 0,
-  zIndex: 10, // ⬅️ below reactionBar (20), above everything else
-},
+  dismissOverlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    zIndex: 10, // keep overlay under badge
+  },
 
 
   header: {
@@ -488,19 +499,19 @@ dismissOverlay: {
 
   reactionsBubble: {
     position: 'absolute',
-    top: -10,                // overlaps the top edge of the bubble
+    top: -10,
     flexDirection: 'row',
     gap: 6,
     paddingHorizontal: 6,
     paddingVertical: 2,
     backgroundColor: '#1f2937',
     borderRadius: 14,
-    // subtle shadow to lift above bubble
     shadowColor: '#000',
     shadowOpacity: 0.3,
     shadowRadius: 3,
     shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
+    zIndex: 30,
+    elevation: 12,
   },
 
     reactionPillInline: {
@@ -553,11 +564,11 @@ msgWrapper: {
     borderRadius: 18,
     paddingHorizontal: 6,
     paddingVertical: 4,
-    marginBottom: 4,
     flexDirection: 'row',
     gap: 6,
-    zIndex: 20,          // ⬅️ keep the bar above the tap-catcher
+    zIndex: 20,
   },
+
 
   reactionBtn: {
     paddingHorizontal: 6,
