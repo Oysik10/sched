@@ -7,7 +7,7 @@ import { getAuth, signOut } from 'firebase/auth';
 const TABS = [
   { label: 'Account Information', route: '../Profile/account-information' },
   { label: 'Friends', route: '../Profile/following' },
-  { label: 'Streak', route: '../Profile/streak' },
+  { label: 'Subscription and Donation', route: '../Profile/streak' },
   { label: 'Settings', route: '../Profile/settings' },
 ];
 
