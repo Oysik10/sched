@@ -751,7 +751,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     overflow: 'visible',
   },
-  
+
   keyboardDismissOverlay: {
     position: 'absolute',
     left: 0,
@@ -824,14 +824,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#111',
     alignItems: 'center',
     minHeight: 34,
-    gap: 8,
+    gap: 6,
     borderTopColor: '#222',
-    paddingVertical: 6,
-    borderTopWidth: 1,
+    paddingVertical: 4,
+    borderTopWidth: 1 // smaller vertical padding
   },
   emojiToggle: {
-    width: 36,
-    height: 36,
+    width: 30,
+    height: 30,
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
@@ -839,7 +839,7 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    height: 40,
+    height: 30,
     color: '#fff',
     backgroundColor: '#222',
     borderRadius: 10,
@@ -848,9 +848,9 @@ const styles = StyleSheet.create({
   sendBtn: {
     backgroundColor: '#2563eb',
     borderRadius: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
     justifyContent: 'center',
-    height: 40,
+    height: 30,
   },
   emojiRow: {
     borderTopColor: '#222',
