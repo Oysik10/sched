@@ -393,6 +393,10 @@ export default function DMScreen() {
     } finally {
       setSending(false);
     }
+    // Scroll to newest (index 0) after sending
+    requestAnimationFrame(() => {
+      flatRef.current?.scrollToIndex({ index: 0, animated: true });
+    });
   };
 
   const displayName =
