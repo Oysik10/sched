@@ -15,6 +15,8 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Keyboard, Pressable } from 'react-native';
+
 
 type Msg = {
   id: string;
@@ -88,6 +90,16 @@ export default function DMScreen() {
     }
     return u.slice(0, 6) + '…';
   };
+
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setKeyboardOpen(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setKeyboardOpen(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => setUid(user?.uid ?? ''));
@@ -574,7 +586,7 @@ export default function DMScreen() {
           {/* Messages (DESC data, inverted list) */}
           <FlatList
             ref={flatRef}
-            data={displayRows} // newest first
+            data={displayRows}
             inverted
             maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             keyExtractor={(row) => row.type === 'separator' ? row.key : row.id}
@@ -582,7 +594,9 @@ export default function DMScreen() {
               if (nativeEvent.contentOffset.y <= 24 && hasMore && !loadingMore) loadOlder();
             }}
             scrollEventThrottle={16}
-            keyboardShouldPersistTaps="always"
+            // 👇 these two make the keyboard dismiss when you drag or tap in the list
+            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
             style={{ flex: 1 }}
             contentContainerStyle={{ padding: 12 }}
             // With inverted lists, use ListFooterComponent for the "top" banner
@@ -671,6 +685,16 @@ export default function DMScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+          
+          {keyboardOpen && (
+            
+          <Pressable
+            onPress={Keyboard.dismiss}
+            style={styles.keyboardDismissOverlay}
+            // Make sure the composer is still tappable:
+            pointerEvents="auto"
+          />
+        )}
 
           {/* Simple emoji row for composing */}
           {pickerOpen && (
@@ -726,6 +750,17 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     paddingTop: 8,
     overflow: 'visible',
+  },
+  
+  keyboardDismissOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 52,          // below your header height (HEADER_H = 52)
+    // leave space so the composer stays clickable; if your composer is ~56px tall:
+    bottom: 56,       // adjust if your composer height differs
+    backgroundColor: 'transparent', // or 'rgba(0,0,0,0.001)' to ensure touch capture
+    zIndex: 50,
   },
   bubble: {
     paddingHorizontal: 12,
