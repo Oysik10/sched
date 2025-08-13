@@ -8,6 +8,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   TextInput,
+  Alert,
+  Platform,
+  ActionSheetIOS,
 } from 'react-native';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
@@ -20,6 +23,9 @@ import {
   where,
   getDocs,
   updateDoc,
+  deleteDoc,
+  writeBatch,
+  limit as fsLimit,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { router } from 'expo-router';
@@ -39,6 +45,7 @@ type Thread = {
     text?: string;
     atMs?: number;
   };
+  lastMessageAtMs?: number;
 };
 
 type UserHit = {
@@ -174,7 +181,93 @@ export default function ChatScreen() {
   }, [search, uid]);
   // --------------------------------------------------------
 
-  // Render a single thread row (other user’s name + last message + unread dot)
+  // Format timestamp (date + time)
+  const formatTimestamp = (ms?: number) => {
+    if (!ms) return '';
+    try {
+      const d = new Date(ms);
+      // Example: Aug 13, 2025, 9:42 PM
+      return d.toLocaleString(undefined, {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    } catch {
+      return '';
+    }
+  };
+
+  // Delete the entire thread and its messages (batched)
+  const deleteConversation = async (threadId: string) => {
+    try {
+      // 1) Delete messages in batches of 500
+      const itemsRef = collection(firestore, 'dms', threadId, 'items');
+      // We only need an index to page; orderBy on __name__ works
+      // but since we didn't import orderBy here for items, use limit alone in simple batches.
+      // (Firestore allows limit queries without orderBy; it returns arbitrary pages—fine for deletion.)
+      // If you want deterministic, add orderBy('__name__') where supported.
+      while (true) {
+        const pageSnap = await getDocs(query(itemsRef, fsLimit(500)));
+        if (pageSnap.empty) break;
+        const batch = writeBatch(firestore);
+        pageSnap.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+        // loop until empty
+      }
+
+      // 2) Delete the thread doc
+      await deleteDoc(doc(firestore, 'dms', threadId));
+    } catch (e) {
+      console.warn('Failed to delete conversation:', e);
+      throw e;
+    }
+  };
+
+  const openThreadOptions = (thread: Thread, otherId: string) => {
+    const onDelete = () => {
+      Alert.alert(
+        'Delete conversation',
+        `This will permanently delete your conversation with ${displayName(otherId)} for you. Continue?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await deleteConversation(thread.id);
+              } catch {
+                Alert.alert('Error', 'Could not delete conversation. Please try again.');
+              }
+            },
+          },
+        ]
+      );
+    };
+
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Cancel', 'Delete Conversation'],
+          destructiveButtonIndex: 1,
+          cancelButtonIndex: 0,
+          title: displayName(otherId),
+        },
+        (index) => {
+          if (index === 1) onDelete();
+        }
+      );
+    } else {
+      Alert.alert(displayName(otherId), '', [
+        { text: 'Delete Conversation', style: 'destructive', onPress: onDelete },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  };
+
+  // Render a single thread row (other user’s name + last message + unread dot + timestamp + options)
   const renderThread = ({ item }: { item: Thread }) => {
     const otherId = (item.participants || []).find((p) => p !== uid) || '';
 
@@ -190,15 +283,14 @@ export default function ChatScreen() {
       return item.lastMessage || '—';
     };
 
+    // Prefer the true message time; fallback to updatedAtMs
+    const lastMsgMs = item.lastMessageAtMs ?? item.updatedAtMs ?? 0;
     const lastText = makePreview();
-
     const lastSeenMine = item.lastSeen?.[uid] ?? 0;
-    const lastMsgMs = (item as any).lastMessageAtMs ?? 0;  // ⬅️ use message time
     const unread = item.lastSenderId !== uid && lastMsgMs > lastSeenMine;
 
     const handleOpenThread = async () => {
       try {
-        // Stamp read against "message time" horizon
         await updateDoc(doc(firestore, 'dms', item.id), {
           [`lastSeen.${uid}`]: Date.now(),
         });
@@ -208,28 +300,49 @@ export default function ChatScreen() {
       router.push(`/dm/${otherId}`);
     };
 
-
     return (
       <TouchableOpacity
         style={styles.row}
         activeOpacity={0.7}
         onPress={handleOpenThread}
       >
+        {/* Avatar */}
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
             {displayName(otherId).replace(/^@/, '').slice(0, 1).toUpperCase()}
           </Text>
         </View>
+
+        {/* Main content */}
         <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
-              {displayName(otherId)}
-            </Text>
-            {unread && <View style={styles.unreadDot} />}
+          {/* Top line: Name + unread dot + options button */}
+          <View style={styles.topLine}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
+              <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
+                {displayName(otherId)}
+              </Text>
+              {unread && <View style={styles.unreadDot} />}
+            </View>
+            <TouchableOpacity
+              onPress={() => openThreadOptions(item, otherId)}
+              hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+            >
+              <Text style={styles.more}>⋯</Text>
+            </TouchableOpacity>
           </View>
-          <Text style={[styles.lastText, unread && styles.lastTextUnread]} numberOfLines={1}>
-            {lastText}
-          </Text>
+
+          {/* Bottom line: preview (left) + timestamp (right) */}
+          <View style={styles.bottomLine}>
+            <Text
+              style={[styles.lastText, unread && styles.lastTextUnread]}
+              numberOfLines={1}
+            >
+              {lastText}
+            </Text>
+            <Text style={styles.time} numberOfLines={1}>
+              {formatTimestamp(lastMsgMs)}
+            </Text>
+          </View>
         </View>
       </TouchableOpacity>
     );
@@ -248,12 +361,19 @@ export default function ChatScreen() {
         </Text>
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.name} numberOfLines={1}>
-          {item.username ? `@${item.username}` : 'Unknown'}
-        </Text>
-        <Text style={styles.lastText} numberOfLines={1}>
-          {[item.firstName, item.lastName].filter(Boolean).join(' ') || '—'}
-        </Text>
+        <View style={styles.topLine}>
+          <Text style={styles.name} numberOfLines={1}>
+            {item.username ? `@${item.username}` : 'Unknown'}
+          </Text>
+          {/* keep spacing consistent */}
+          <Text style={styles.time} />
+        </View>
+        <View style={styles.bottomLine}>
+          <Text style={styles.lastText} numberOfLines={1}>
+            {[item.firstName, item.lastName].filter(Boolean).join(' ') || '—'}
+          </Text>
+          <Text style={styles.time} />
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -308,7 +428,7 @@ export default function ChatScreen() {
           data={threads}
           keyExtractor={(t) => t.id}
           renderItem={renderThread}
-          contentContainerStyle={{ paddingHorizontal: 12 }}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8 }}
         />
       )}
     </View>
@@ -355,8 +475,24 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   avatarText: { color: '#e5e7eb', fontWeight: '700', fontSize: 14 },
+
+  // text
   name: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  lastText: { color: '#bbb', marginTop: 2 },
+  lastText: { color: '#bbb', marginTop: 2, flexShrink: 1 },
+  time: { color: '#7c7c7c', marginTop: 2, marginLeft: 10, fontSize: 12 },
+
+  // layout lines
+  topLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  bottomLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minWidth: 0,
+  },
 
   // unread styling
   unreadDot: {
@@ -372,5 +508,13 @@ const styles = StyleSheet.create({
   },
   lastTextUnread: {
     color: '#dbeafe', // light blue
+  },
+
+  // options button
+  more: {
+    color: '#aaa',
+    fontSize: 18,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
 });
