@@ -55,12 +55,10 @@ export default function SearchUsersScreen() {
     if (!currentUid) return;
 
     try {
-      // you -> them
       await setDoc(doc(firestore, 'users', currentUid, 'following', friendUid), {
         followedUid: friendUid,
         createdAt: new Date(),
       });
-      // appears under their followers
       await setDoc(doc(firestore, 'users', friendUid, 'followers', currentUid), {
         followerUid: currentUid,
         createdAt: new Date(),
@@ -101,7 +99,6 @@ export default function SearchUsersScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // remove both directions
               await Promise.all([
                 deleteDoc(doc(firestore, 'users', currentUid, 'following', friendUid)),
                 deleteDoc(doc(firestore, 'users', friendUid, 'followers', currentUid)),
@@ -129,13 +126,19 @@ export default function SearchUsersScreen() {
           style={styles.input}
           placeholder="Enter username"
           placeholderTextColor="#888"
-          autoCapitalize="none" // prevents iOS from auto-capitalizing
+          autoCapitalize="none"
           value={search}
           onChangeText={(text) =>
-            setSearch(text.replace(/\s/g, '').toLowerCase()) // no spaces + lowercase
+            setSearch(text.replace(/\s/g, '').toLowerCase())
           }
           onSubmitEditing={handleSearch}
         />
+        <TouchableOpacity
+          style={styles.searchButton}
+          onPress={handleSearch}
+        >
+          <Text style={styles.searchIcon}>Search</Text>
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -158,7 +161,6 @@ export default function SearchUsersScreen() {
                     <Text style={styles.username}>@{item.username}</Text>
                     <Text style={styles.details}>{item.firstName} {item.lastName}</Text>
                   </View>
-
                   {isFriends && (
                     <View style={styles.friendsBadge}>
                       <Text style={styles.friendsBadgeText}>Friends ✓</Text>
@@ -174,8 +176,8 @@ export default function SearchUsersScreen() {
                   }}
                   style={[
                     styles.addButton,
-                    isFriends && { backgroundColor: '#3cab5b' }, // green for Unfriend state
-                    !isFriends && isFollowing && { backgroundColor: '#444' }, // grey for Sent
+                    isFriends && { backgroundColor: '#3cab5b' },
+                    !isFriends && isFollowing && { backgroundColor: '#444' },
                   ]}
                 >
                   <Text style={styles.addButtonText}>
@@ -207,8 +209,15 @@ const styles = StyleSheet.create({
   },
   atSymbol: { color: '#888', fontSize: 16, marginRight: 4 },
   input: { flex: 1, color: '#fff', fontSize: 16 },
+  searchButton: {
+    backgroundColor: '#3cab5b',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  searchIcon: { color: '#fff', fontSize: 16 },
   status: { color: '#888', textAlign: 'center', marginTop: 16 },
-
   userItem: {
     backgroundColor: '#1a1a1a',
     padding: 12,
@@ -218,8 +227,6 @@ const styles = StyleSheet.create({
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   username: { color: '#4f8ef7', fontSize: 16, fontWeight: '600' },
   details: { color: '#ccc', fontSize: 14, marginBottom: 8 },
-
-  // Friends badge styles
   friendsBadge: {
     backgroundColor: '#16351f',
     borderColor: '#3cab5b',
@@ -229,7 +236,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   friendsBadgeText: { color: '#3cab5b', fontSize: 12, fontWeight: '700' },
-
   addButton: {
     backgroundColor: '#1e3a8a',
     paddingVertical: 8,
