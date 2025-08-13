@@ -1,32 +1,56 @@
 // app/dm/[uid].tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity,
+import {
+  View, Text, FlatList, TextInput, TouchableOpacity,
   StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
-  ScrollView, Modal } from 'react-native';
+  ScrollView, Modal, Alert
+} from 'react-native';
 import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
+import { BlurView } from 'expo-blur';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
   addDoc, collection, doc, getDoc, onSnapshot,
   orderBy, query, serverTimestamp, setDoc, updateDoc, deleteField,
-  limitToLast, endBefore, limit, getDocs
+  limitToLast, endBefore, limit, getDocs, deleteDoc, Timestamp
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { BlurView } from 'expo-blur';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Msg = {
   id: string;
   text: string;
   senderId: string;
-  createdAt: number;          // client ms timestamp for reliable sorting
-  timestamp?: any;            // server timestamp for backend truth / rules
-  reactions?: Record<string, string>; // userId -> emoji
+  createdAt: any;            // Firestore Timestamp (TTL field)
+  createdAtMs?: number;      // local ms for UI math
+  reactions?: Record<string, string>;
+  replyTo?: { msgId: string; text: string; senderId: string };
 };
 
 const REACTION_SET = ['❤️','👍','😂','😮','😢','🔥','👏'] as const;
 const COMPOSER_EMOJI = ['😀','😂','😍','👍','🙏','🔥','❤️','🎉','😮','😢'] as const;
+const HOUR_MS = 60 * 60 * 1000;
 
 function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
+}
+
+// Convert Timestamp | number to ms (fallback-safe)
+function toMs(val: any): number {
+  if (typeof val === 'number') return val;
+  if (val && typeof val.toMillis === 'function') return val.toMillis();
+  return 0;
+}
+function getMs(m: Msg): number {
+  // Fallback to either createdAtMs (number) or createdAt/timestamp (Timestamp)
+  return toMs(m.createdAtMs ?? m.createdAt);
+}
+
+function formatTimestamp(ms: number, { withSeconds = false, includeDate = true }: { withSeconds?: boolean; includeDate?: boolean } = {}) {
+  const d = new Date(ms);
+  const opts: Intl.DateTimeFormatOptions = includeDate
+    ? { year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', second: withSeconds ? '2-digit' : undefined }
+    : { hour: 'numeric', minute: '2-digit', second: withSeconds ? '2-digit' : undefined };
+  return d.toLocaleString(undefined, opts);
 }
 
 export default function DMScreen() {
@@ -41,12 +65,19 @@ export default function DMScreen() {
   const [loading, setLoading] = useState(true);
   const [otherProfile, setOtherProfile] = useState<{ username?: string; firstName?: string; lastName?: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [selectedForReaction, setSelectedForReaction] = useState<Msg | null>(null); // <-- NEW: modal trigger
+  const [selectedForReaction, setSelectedForReaction] = useState<Msg | null>(null); // modal trigger
+  const [replyingTo, setReplyingTo] = useState<Msg | null>(null);
+
   const flatRef = useRef<FlatList>(null);
+  const lastPreviewMsgIdRef = useRef<string | null>(null); // keeps chat preview in sync
   const PAGE = 40;
   const [oldestCursor, setOldestCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+
+  const insets = useSafeAreaInsets();
+  const HEADER_H = 52;
+  const keyboardOffset = insets.top + HEADER_H;
 
   const getDisplayName = (u: string) => {
     if (u === uid) return 'You';
@@ -60,9 +91,7 @@ export default function DMScreen() {
   };
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setUid(user?.uid ?? '');
-    });
+    const unsub = onAuthStateChanged(auth, (user) => setUid(user?.uid ?? ''));
     return unsub;
   }, []);
 
@@ -76,8 +105,7 @@ export default function DMScreen() {
         const uref = doc(firestore, 'users', otherUid);
         const snap = await getDoc(uref);
         setOtherProfile(snap.exists() ? (snap.data() as any) : {});
-      } catch (e) {
-        console.warn('Profile load failed:', e);
+      } catch {
         setOtherProfile({});
       }
     })();
@@ -88,130 +116,90 @@ export default function DMScreen() {
     if (!threadId) return;
     (async () => {
       try {
-        const tref = doc(firestore, 'dms', threadId);
         await setDoc(
-          tref,
+          doc(firestore, 'dms', threadId),
           { participants: [uid, otherUid].sort() },
           { merge: true }
         );
-      } catch (e) {
-        console.warn('Create/merge thread failed:', e);
-      }
+      } catch {}
     })();
   }, [threadId, uid, otherUid]);
 
-  // Stream messages
+  // Stream messages (ASC)
   useEffect(() => {
     if (!threadId) return;
-    const q = query(
+    const qy = query(
       collection(firestore, 'dms', threadId, 'items'),
       orderBy('createdAt', 'asc'),
       limitToLast(PAGE)
     );
-
     const unsub = onSnapshot(
-      q,
+      qy,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
         setMessages(list);
-        setOldestCursor(list.length ? list[0].createdAt : null);
+        const first = list[0];
+        setOldestCursor(first ? getMs(first) : null);
         setHasMore(true);
         setLoading(false);
         requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
       },
-      (err) => {
-        console.warn('Message stream error:', err);
-        setLoading(false);
-      }
+      () => setLoading(false)
     );
     return unsub;
   }, [threadId]);
 
-  const send = async () => {
-    const trimmed = text.trim();
-    if (!trimmed || !uid || !threadId) return;
+  // Build a display list with explicit separator rows
+  type Row =
+    | { type: 'separator'; key: string; atMs: number }
+    | ({ type: 'message' } & Msg);
 
-    try {
-      setSending(true);
-      const now = Date.now();
-      const expiresAt = new Date(now + 24 * 60 * 60 * 1000); // 24h from now
-
-      await addDoc(collection(firestore, 'dms', threadId, 'items'), {
-        text: trimmed,
-        senderId: uid,
-        createdAt: now,
-        timestamp: serverTimestamp(),
-        expiresAt,
-      });
-
-      await setDoc(
-        doc(firestore, 'dms', threadId),
-        {
-          lastMessage: trimmed,
-          lastSenderId: uid,
-          lastMessageAtMs: now,
-          updatedAt: serverTimestamp(),
-          updatedAtMs: now,
-          expiresAt,
-          lastActivity: {
-            type: 'message',
-            actorId: uid,
-            text: trimmed,
-            atMs: now,
-          },
-        },
-        { merge: true }
-      );
-
-      setText('');
-      setPickerOpen(false);
-      requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
-    } catch (e) {
-      console.warn('DM send failed:', e);
-    } finally {
-      setSending(false);
+  const displayRows = useMemo<Row[]>(() => {
+    const rows: Row[] = [];
+    let prevMs = 0;
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i];
+      const curMs = getMs(m);
+      if (i === 0 || (curMs - prevMs) >= HOUR_MS) {
+        rows.push({ type: 'separator', key: `sep-${curMs}`, atMs: curMs });
+      }
+      rows.push({ type: 'message', ...m });
+      prevMs = curMs;
     }
-  };
+    return rows;
+  }, [messages]);
 
   const loadOlder = async () => {
     if (!threadId || !oldestCursor || loadingMore || !hasMore) return;
     try {
       setLoadingMore(true);
+      // Page older using the same 'createdAt' ordering (Timestamp)
       const olderQ = query(
         collection(firestore, 'dms', threadId, 'items'),
         orderBy('createdAt', 'asc'),
-        endBefore(oldestCursor),
+        endBefore(Timestamp.fromMillis(oldestCursor)),
         limitToLast(PAGE)
       );
       const snap = await getDocs(olderQ);
       const older = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
-      if (older.length === 0) {
-        setHasMore(false);
-        return;
-      }
+      if (older.length === 0) { setHasMore(false); return; }
       setMessages((prev) => [...older, ...prev]);
-      setOldestCursor(older[0].createdAt);
-    } catch (e) {
-      console.warn('loadOlder failed:', e);
+      const first = older[0];
+      setOldestCursor(first ? getMs(first) : null);
     } finally {
       setLoadingMore(false);
     }
   };
 
-  // --- Mark thread as read (clock-skew safe) ---
+  // Mark thread read
   const markThreadRead = async () => {
     if (!uid || !threadId) return;
     try {
-      const latestMsgMs = messages.length ? messages[messages.length - 1].createdAt : 0;
+      const latest = messages[messages.length - 1];
+      const latestMsgMs = latest ? getMs(latest) : 0;
       const safeSeen = Math.max(Date.now(), latestMsgMs);
-      await setDoc(
-        doc(firestore, 'dms', threadId),
-        { [`lastSeen.${uid}`]: safeSeen },
-        { merge: true }
-      );
-    } catch (e) {
-      console.warn('markThreadRead failed:', e);
-    }
+      await setDoc(doc(firestore, 'dms', threadId), { [`lastSeen.${uid}`]: safeSeen }, { merge: true });
+    } catch {}
   };
 
   useFocusEffect(
@@ -220,35 +208,74 @@ export default function DMScreen() {
       return () => {};
     }, [threadId, uid, messages.length])
   );
-
   useEffect(() => {
     if (messages.length) markThreadRead();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length]);
 
-  // --- Reaction helpers (unchanged behavior) ---
+  // Keep thread preview in sync if last message changes (e.g., TTL delete)
+  const refreshThreadPreview = async () => {
+    if (!threadId) return;
+    try {
+      const latestQ = query(
+        collection(firestore, 'dms', threadId, 'items'),
+        orderBy('createdAt', 'desc'),
+        limit(1)
+      );
+      const snap = await getDocs(latestQ);
+      const now = Date.now();
+
+      if (snap.empty) {
+        await updateDoc(doc(firestore, 'dms', threadId), {
+          updatedAt: serverTimestamp(),
+          updatedAtMs: now,
+          lastMessage: deleteField(),
+          lastSenderId: deleteField(),
+          lastMessageAtMs: deleteField(),
+          lastActivity: { type: 'cleanup', atMs: now },
+        });
+        lastPreviewMsgIdRef.current = '__empty__';
+      } else {
+        const d = snap.docs[0];
+        const m = d.data() as Msg;
+        const latestMs = getMs(m);
+        await updateDoc(doc(firestore, 'dms', threadId), {
+          updatedAt: serverTimestamp(),
+          updatedAtMs: now,
+          lastMessage: m.text || '',
+          lastSenderId: m.senderId || '',
+          lastMessageAtMs: latestMs,
+          lastActivity: { type: 'message', actorId: m.senderId, text: m.text || '', atMs: latestMs },
+        });
+        lastPreviewMsgIdRef.current = d.id;
+      }
+    } catch (e) {
+      console.warn('refreshThreadPreview failed:', e);
+    }
+  };
+
+  useEffect(() => {
+    const latest = messages[messages.length - 1];
+    const latestId = latest?.id ?? '__empty__';
+    if (lastPreviewMsgIdRef.current !== latestId) {
+      // Only writes when the top-most message actually changes
+      refreshThreadPreview();
+    }
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Reactions
   const removeMyReaction = async (msg: Msg) => {
     if (!uid || !threadId) return;
     const mine = msg.reactions?.[uid];
     if (!mine) return;
-
     try {
       setRemoving(true);
       const now = Date.now();
-      const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
-
-      await updateDoc(mref, { [`reactions.${uid}`]: deleteField() });
-
-      // Clear lastActivity so the preview disappears immediately
+      await updateDoc(doc(firestore, 'dms', threadId, 'items', msg.id), { [`reactions.${uid}`]: deleteField() });
       await updateDoc(doc(firestore, 'dms', threadId), {
-        updatedAt: serverTimestamp(),
-        updatedAtMs: now,
-        lastActivity: deleteField(),
+        updatedAt: serverTimestamp(), updatedAtMs: now, lastActivity: deleteField(),
       });
-
       setReactionDetailsFor(null);
-    } catch (e) {
-      console.warn('Remove reaction failed:', e);
     } finally {
       setRemoving(false);
     }
@@ -265,68 +292,101 @@ export default function DMScreen() {
       if (mine === emoji) {
         await updateDoc(mref, { [`reactions.${uid}`]: deleteField() });
         await updateDoc(doc(firestore, 'dms', threadId), {
-          updatedAt: serverTimestamp(),
-          updatedAtMs: now,
-          lastActivity: deleteField(),
+          updatedAt: serverTimestamp(), updatedAtMs: now, lastActivity: deleteField(),
         });
       } else {
         await updateDoc(mref, { [`reactions.${uid}`]: emoji });
-
         await setDoc(
           doc(firestore, 'dms', threadId),
           {
             updatedAt: serverTimestamp(),
             updatedAtMs: now,
-            lastActivity: {
-              type: 'reaction',
-              actorId: uid,
-              emoji,
-              text: msg.text || '',
-              msgId: msg.id,
-              atMs: now,
-            },
+            lastActivity: { type: 'reaction', actorId: uid, emoji, text: msg.text || '', msgId: msg.id, atMs: now },
           },
           { merge: true }
         );
       }
-      // Close the modal if we were reacting from it
       setSelectedForReaction(null);
     } catch (e) {
       console.warn('Reaction failed:', e);
     }
   };
 
-  // --- UI helpers ---
-  const renderReactionsSummary = (msg: Msg, mine: boolean) => {
-    const values = Object.values(msg.reactions || {});
-    if (values.length === 0) return null;
+  // Message actions: Reply / Delete
+  const startReply = (msg: Msg) => {
+    setReplyingTo(msg);
+    setSelectedForReaction(null);
+  };
 
-    const counts = values.reduce<Record<string, number>>((acc, em) => {
-      acc[em] = (acc[em] || 0) + 1;
-      return acc;
-    }, {});
-    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const confirmDelete = (msg: Msg) => {
+    if (msg.senderId !== uid) return;
+    Alert.alert('Delete message?', 'This can’t be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: () => deleteMessage(msg) },
+    ]);
+  };
 
-    const onPressBadge = () => {
-      setReactionDetailsFor(msg);
-    };
+  const deleteMessage = async (msg: Msg) => {
+    if (!threadId) return;
+    try {
+      await deleteDoc(doc(firestore, 'dms', threadId, 'items', msg.id));
+      await refreshThreadPreview(); // ensure chat list preview updates immediately
+    } catch (e) {
+      console.warn('deleteMessage failed:', e);
+    } finally {
+      setSelectedForReaction(null);
+      if (replyingTo?.id === msg.id) setReplyingTo(null);
+    }
+  };
 
-    return (
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={onPressBadge}
-        style={[
-          styles.reactionsBubble,
-          mine ? { right: 6, alignSelf: 'flex-end' } : { left: 6, alignSelf: 'flex-start' },
-        ]}
-      >
-        {entries.map(([em, n]) => (
-          <View key={em} style={styles.reactionPillInline}>
-            <Text style={styles.reactionText}>{em} {n > 1 ? n : ''}</Text>
-          </View>
-        ))}
-      </TouchableOpacity>
-    );
+  // Send (TTL-ready)
+  const send = async () => {
+    const trimmed = text.trim();
+    if (!uid || !threadId || !trimmed) return;
+
+    try {
+      setSending(true);
+      const now = Date.now();
+
+      const payload: any = {
+        text: trimmed,
+        senderId: uid,
+        createdAt: serverTimestamp(), // ✅ TTL field
+        createdAtMs: now,             // ✅ instant UI math
+      };
+      if (replyingTo) {
+        payload.replyTo = {
+          msgId: replyingTo.id,
+          text: replyingTo.text,
+          senderId: replyingTo.senderId,
+        };
+      }
+
+      await addDoc(collection(firestore, 'dms', threadId, 'items'), payload);
+
+      // Update thread preview
+      await setDoc(
+        doc(firestore, 'dms', threadId),
+        {
+          lastMessage: trimmed,
+          lastSenderId: uid,
+          lastMessageAtMs: now,
+          updatedAt: serverTimestamp(),
+          updatedAtMs: now,
+          lastActivity: { type: 'message', actorId: uid, text: trimmed, atMs: now, replyToId: replyingTo?.id || null },
+        },
+        { merge: true }
+      );
+
+      setText('');
+      setPickerOpen(false);
+      setReplyingTo(null);
+      requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
+    } catch (e) {
+      console.warn('DM send failed:', e);
+    } finally {
+      setSending(false);
+    }
   };
 
   const displayName =
@@ -341,7 +401,6 @@ export default function DMScreen() {
       </View>
     );
   }
-
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -357,9 +416,47 @@ export default function DMScreen() {
     router.back();
   };
 
+  const renderReactionsSummary = (msg: Msg, mine: boolean) => {
+    const values = Object.values(msg.reactions || {});
+    if (values.length === 0) return null;
+    const counts = values.reduce<Record<string, number>>((acc, em) => {
+      acc[em] = (acc[em] || 0) + 1;
+      return acc;
+    }, {});
+    const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    return (
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={() => setReactionDetailsFor(msg)}
+        style={[
+          styles.reactionsBubble,
+          mine ? { right: 6, alignSelf: 'flex-end' } : { left: 6, alignSelf: 'flex-start' },
+        ]}
+      >
+        {entries.map(([em, n]) => (
+          <View key={em} style={styles.reactionPillInline}>
+            <Text style={styles.reactionText}>{em} {n > 1 ? n : ''}</Text>
+          </View>
+        ))}
+      </TouchableOpacity>
+    );
+  };
+
+  const renderReplyPreview = (msg: Msg) => {
+    if (!msg.replyTo) return null;
+    const name = getDisplayName(msg.replyTo.senderId);
+    return (
+      <View style={styles.replyPreview}>
+        <View style={styles.replyBar} />
+        <Text style={styles.replyTitle}>{name}</Text>
+        <Text style={styles.replyText} numberOfLines={1}>{msg.replyTo.text}</Text>
+      </View>
+    );
+  };
+
   return (
     <>
-      {/* Reactions details modal (who reacted) */}
+      {/* Reactions details modal */}
       <Modal
         visible={!!reactionDetailsFor}
         transparent
@@ -383,9 +480,7 @@ export default function DMScreen() {
                 style={[styles.modalBtn, removing && { opacity: 0.6 }]}
                 disabled={removing}
               >
-                <Text style={styles.modalBtnText}>
-                  {removing ? 'Removing…' : 'Remove my reaction'}
-                </Text>
+                <Text style={styles.modalBtnText}>{removing ? 'Removing…' : 'Remove my reaction'}</Text>
               </TouchableOpacity>
             ) : null}
             <TouchableOpacity onPress={() => setReactionDetailsFor(null)} style={styles.modalClose}>
@@ -395,49 +490,72 @@ export default function DMScreen() {
         </View>
       </Modal>
 
-      {/* NEW: Long-press reaction picker modal */}
+      {/* Long-press modal */}
       <Modal
         visible={!!selectedForReaction}
         transparent
         animationType="fade"
         onRequestClose={() => setSelectedForReaction(null)}
       >
-<BlurView intensity={30} tint="dark" style={styles.reactionOverlay}>
-  {/* Tap outside to close */}
-  <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
+        <BlurView intensity={30} tint="dark" style={styles.reactionOverlay}>
+          {/* Tap outside to close */}
+          <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
 
-  {selectedForReaction && (
-    <View style={styles.focusCard}>
-      {/* Reaction row on TOP */}
-      <View style={styles.reactionBarModal}>
-        {REACTION_SET.map((em) => (
-          <TouchableOpacity
-            key={em}
-            onPress={() => toggleReaction(selectedForReaction, em)}
-            style={styles.reactionBtnModal}
-          >
-            <Text style={{ fontSize: 26 }}>{em}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+          {selectedForReaction && (
+            <View style={styles.focusCard}>
+              {/* Accurate timestamp for THIS message */}
+              <Text style={styles.modalTimestamp}>
+                {formatTimestamp(getMs(selectedForReaction), { includeDate: true, withSeconds: true })}
+              </Text>
 
-      {/* Focused message bubble BELOW */}
-      <View style={[styles.bubble, selectedForReaction.senderId === uid ? styles.mine : styles.theirs]}>
-        <Text style={styles.text}>{selectedForReaction.text}</Text>
-      </View>
-    </View>
-  )}
+              {/* Reaction row on TOP */}
+              <View style={styles.reactionBarModal}>
+                {REACTION_SET.map((em) => (
+                  <TouchableOpacity
+                    key={em}
+                    onPress={() => toggleReaction(selectedForReaction, em)}
+                    style={styles.reactionBtnModal}
+                  >
+                    <Text style={{ fontSize: 26 }}>{em}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
 
-  {/* Tap outside to close (bottom spacer) */}
-  <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
-</BlurView>
+              {/* Focused message bubble */}
+              <View style={[styles.bubble, selectedForReaction.senderId === uid ? styles.mine : styles.theirs]}>
+                {renderReplyPreview(selectedForReaction)}
+                <Text style={styles.text}>{selectedForReaction.text}</Text>
+              </View>
 
+              {/* ACTION ROW: Reply / Delete */}
+              <View style={styles.actionRow}>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => startReply(selectedForReaction)}
+                >
+                  <Text style={styles.actionText}>Reply</Text>
+                </TouchableOpacity>
+
+                {selectedForReaction.senderId === uid && (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, styles.actionDanger]}
+                    onPress={() => confirmDelete(selectedForReaction)}
+                  >
+                    <Text style={[styles.actionText, styles.actionDangerText]}>Delete</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Tap outside to close (bottom spacer) */}
+          <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
+        </BlurView>
       </Modal>
-
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={80}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? keyboardOffset : 0}
       >
         <View style={{ flex: 1 }}>
           {/* Header */}
@@ -449,36 +567,49 @@ export default function DMScreen() {
             <View style={{ width: 60 }} />
           </View>
 
-          {/* Messages */}
+          {/* Messages (ASC). Load older near TOP; show banner at TOP */}
           <FlatList
             ref={flatRef}
-            data={messages}
-            keyExtractor={(m) => m.id}
-            onEndReached={() => loadOlder()}
-            onEndReachedThreshold={0.2}
-            ListFooterComponent={
+            data={displayRows}
+            keyExtractor={(row) => row.type === 'separator' ? row.key : row.id}
+            onScroll={({ nativeEvent }) => {
+              if (nativeEvent.contentOffset.y <= 24 && hasMore && !loadingMore) loadOlder();
+            }}
+            scrollEventThrottle={16}
+            keyboardShouldPersistTaps="always"
+            style={{ flex: 1 }}
+            contentContainerStyle={{ padding: 12 }}
+            ListHeaderComponent={
               loadingMore ? (
-                <View style={{ paddingVertical: 10 }}>
-                  <ActivityIndicator />
-                </View>
+                <View style={{ paddingVertical: 10 }}><ActivityIndicator /></View>
               ) : !hasMore ? (
                 <View style={{ paddingVertical: 10, alignItems: 'center' }}>
                   <Text style={{ color: '#666' }}>No older messages</Text>
                 </View>
-              ) : null
+              ) : (
+                <View style={{ height: 4 }} />
+              )
             }
-            keyboardShouldPersistTaps="always"
-            style={{ flex: 1 }}
-            contentContainerStyle={{ padding: 12 }}
             renderItem={({ item }) => {
+              if (item.type === 'separator') {
+                return (
+                  <View style={styles.timeSeparator}>
+                    <Text style={styles.timeSeparatorText}>
+                      {formatTimestamp(item.atMs, { includeDate: true })}
+                    </Text>
+                  </View>
+                );
+              }
+
               const mine = item.senderId === uid;
               return (
                 <View style={styles.msgWrapper}>
                   <TouchableOpacity
                     activeOpacity={0.8}
-                    onLongPress={() => setSelectedForReaction(item)}   // <-- open modal on long-press
+                    onLongPress={() => setSelectedForReaction(item)}
                     style={[styles.bubble, mine ? styles.mine : styles.theirs]}
                   >
+                    {renderReplyPreview(item)}
                     <Text style={styles.text}>{item.text}</Text>
                   </TouchableOpacity>
 
@@ -488,20 +619,37 @@ export default function DMScreen() {
             }}
           />
 
+          {/* Composer banner for reply */}
+          {replyingTo && (
+            <View style={styles.banner}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.bannerTitle}>Replying to {getDisplayName(replyingTo.senderId)}</Text>
+                <Text style={styles.bannerText} numberOfLines={1}>{replyingTo.text}</Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setReplyingTo(null)}
+                style={styles.bannerClose}
+              >
+                <Text style={{ color: '#9aa7b1', fontWeight: '700' }}>×</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
           {/* Composer */}
           <View style={styles.inputRow}>
             <TouchableOpacity onPress={() => setPickerOpen((v) => !v)} style={styles.emojiToggle}>
               <Text style={{ fontSize: 20 }}>😊</Text>
             </TouchableOpacity>
-
             <TextInput
               value={text}
               onChangeText={setText}
-              placeholder="iMessage…"
+              placeholder={replyingTo ? 'Reply…' : 'Message…'}
               placeholderTextColor="#888"
-              style={styles.input}
-              onSubmitEditing={() => (!sendDisabled ? send() : undefined)}
-              returnKeyType="send"
+              style={[styles.input, { maxHeight: 120 }]}
+              multiline
+              blurOnSubmit={false}
+              returnKeyType="default"
+              textAlignVertical="top" // Android: keep multi-line text aligned nicely
               autoCapitalize="none"
             />
             <TouchableOpacity
@@ -509,7 +657,9 @@ export default function DMScreen() {
               style={[styles.sendBtn, sendDisabled && { opacity: 0.5 }]}
               disabled={sendDisabled}
             >
-              <Text style={{ color: '#fff', fontWeight: '700' }}>{sending ? 'Sending…' : 'Send'}</Text>
+              <Text style={{ color: '#fff', fontWeight: '700' }}>
+                {sending ? 'Sending…' : 'Send'}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -551,6 +701,17 @@ const styles = StyleSheet.create({
     paddingRight: 60,
   },
 
+  // Timestamp separators
+  timeSeparator: {
+    alignSelf: 'center',
+    backgroundColor: '#1a1a1a',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 8,
+  },
+  timeSeparatorText: { color: '#bfbfbf', fontSize: 12, fontWeight: '600' },
+
   msgWrapper: {
     position: 'relative',
     marginBottom: 12,
@@ -576,7 +737,7 @@ const styles = StyleSheet.create({
   },
   text: { color: '#fff', fontSize: 16 },
 
-  // Reactions summary bubble
+  // Inline reactions summary bubble
   reactionsBubble: {
     position: 'absolute',
     top: -10,
@@ -600,6 +761,17 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
   },
   reactionText: { color: '#fff' },
+
+  // Reply preview inside bubbles
+  replyPreview: {
+    borderLeftWidth: 3,
+    borderLeftColor: '#6b7280',
+    paddingLeft: 8,
+    marginBottom: 4,
+  },
+  replyBar: { width: 0, height: 0 },
+  replyTitle: { color: '#c3dafe', fontSize: 12, marginBottom: 2 },
+  replyText: { color: '#ccc', fontSize: 12 },
 
   // Composer
   inputRow: {
@@ -648,53 +820,51 @@ const styles = StyleSheet.create({
     backgroundColor: '#161616',
   },
 
+  // Reply banner
+  banner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#0b0b0b',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#222',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  bannerTitle: { color: '#c3dafe', fontWeight: '700' },
+  bannerText: { color: '#aaa' },
+  bannerClose: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center',
+  },
+
   // Generic modal styles (details modal)
   modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
   },
   modalCard: {
-    width: '86%',
-    backgroundColor: '#111',
-    borderRadius: 14,
-    padding: 16,
-    borderColor: '#222',
+    width: '86%', backgroundColor: '#111', borderRadius: 14, padding: 16, borderColor: '#222',
     borderWidth: StyleSheet.hairlineWidth,
   },
   modalTitle: { color: '#fff', fontSize: 16, fontWeight: '700' },
   modalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 6,
-    borderBottomColor: '#1f1f1f',
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6,
+    borderBottomColor: '#1f1f1f', borderBottomWidth: StyleSheet.hairlineWidth,
   },
   modalEmoji: { fontSize: 20 },
   modalText: { color: '#ddd', fontSize: 15 },
   modalBtn: {
-    marginTop: 14,
-    backgroundColor: '#30363d',
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
+    marginTop: 14, backgroundColor: '#30363d', borderRadius: 8, paddingVertical: 10, alignItems: 'center',
   },
   modalBtnText: { color: '#fff', fontWeight: '700' },
   modalClose: { marginTop: 10, alignItems: 'center' },
   modalCloseText: { color: '#9aa7b1' },
 
-  // NEW: Long-press reaction overlay
+  // Long-press overlay + focus card
   reactionOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)', // dim; replace with BlurView if desired
-    justifyContent: 'center',
-    paddingHorizontal: 24,
+    flex: 1, justifyContent: 'center', paddingHorizontal: 24,
   },
-  overlayTouchable: {
-    flex: 1,
-  },
+  overlayTouchable: { flex: 1 },
   focusCard: {
     alignSelf: 'stretch',
     backgroundColor: '#0d0d0d',
@@ -703,8 +873,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 14,
   },
+  modalTimestamp: {
+    alignSelf: 'center',
+    color: '#9aa7b1',
+    fontSize: 12,
+    marginBottom: 8,
+  },
   reactionBarModal: {
-    marginTop: 10,
     alignSelf: 'center',
     flexDirection: 'row',
     gap: 10,
@@ -712,9 +887,26 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     paddingHorizontal: 10,
     paddingVertical: 6,
+    marginBottom: 10,
   },
-  reactionBtnModal: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  reactionBtnModal: { paddingHorizontal: 6, paddingVertical: 2 },
+
+  // Action row under bubble
+  actionRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    gap: 8,
   },
+  actionBtn: {
+    backgroundColor: '#1f2937',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    minWidth: 88,
+    alignItems: 'center',
+  },
+  actionText: { color: '#e5e7eb', fontWeight: '700' },
+  actionDanger: { backgroundColor: '#2b1c1c' },
+  actionDangerText: { color: '#fca5a5' },
 });
