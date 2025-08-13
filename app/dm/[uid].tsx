@@ -11,7 +11,7 @@ import { auth, firestore } from '../../src/firebaseConfig';
 import {
   addDoc, collection, doc, getDoc, onSnapshot,
   orderBy, query, serverTimestamp, setDoc, updateDoc, deleteField,
-  limitToLast, endBefore, limit, getDocs, deleteDoc, Timestamp
+  limit, getDocs, deleteDoc, Timestamp, startAfter
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -29,6 +29,7 @@ type Msg = {
 const REACTION_SET = ['❤️','👍','😂','😮','😢','🔥','👏'] as const;
 const COMPOSER_EMOJI = ['😀','😂','😍','👍','🙏','🔥','❤️','🎉','😮','😢'] as const;
 const HOUR_MS = 60 * 60 * 1000;
+const PAGE = 40;
 
 function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
@@ -41,7 +42,6 @@ function toMs(val: any): number {
   return 0;
 }
 function getMs(m: Msg): number {
-  // Fallback to either createdAtMs (number) or createdAt/timestamp (Timestamp)
   return toMs(m.createdAtMs ?? m.createdAt);
 }
 
@@ -65,12 +65,11 @@ export default function DMScreen() {
   const [loading, setLoading] = useState(true);
   const [otherProfile, setOtherProfile] = useState<{ username?: string; firstName?: string; lastName?: string } | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [selectedForReaction, setSelectedForReaction] = useState<Msg | null>(null); // modal trigger
+  const [selectedForReaction, setSelectedForReaction] = useState<Msg | null>(null);
   const [replyingTo, setReplyingTo] = useState<Msg | null>(null);
 
   const flatRef = useRef<FlatList>(null);
-  const lastPreviewMsgIdRef = useRef<string | null>(null); // keeps chat preview in sync
-  const PAGE = 40;
+  const lastPreviewMsgIdRef = useRef<string | null>(null);
   const [oldestCursor, setOldestCursor] = useState<number | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -125,67 +124,75 @@ export default function DMScreen() {
     })();
   }, [threadId, uid, otherUid]);
 
-  // Stream messages (ASC)
+  // Stream messages (DESC: newest first)
   useEffect(() => {
     if (!threadId) return;
     const qy = query(
       collection(firestore, 'dms', threadId, 'items'),
-      orderBy('createdAt', 'asc'),
-      limitToLast(PAGE)
+      orderBy('createdAt', 'desc'),
+      limit(PAGE)
     );
     const unsub = onSnapshot(
       qy,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
-        setMessages(list);
-        const first = list[0];
-        setOldestCursor(first ? getMs(first) : null);
-        setHasMore(true);
+        setMessages(list); // newest is at index 0
+        const last = list[list.length - 1]; // this is the OLDEST of this page
+        setOldestCursor(last ? getMs(last) : null);
+        setHasMore(list.length === PAGE);
         setLoading(false);
-        requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
       },
       () => setLoading(false)
     );
     return unsub;
   }, [threadId]);
 
-  // Build a display list with explicit separator rows
+  // Build display rows with separators based on DESC data
   type Row =
     | { type: 'separator'; key: string; atMs: number }
     | ({ type: 'message' } & Msg);
 
+  const SEPARATOR_GAP_MS = 10 * 60 * 1000; // 10 minutes
+
   const displayRows = useMemo<Row[]>(() => {
     const rows: Row[] = [];
-    let prevMs = 0;
+    let prevMs: number | null = null; // previous (newer) timestamp — messages are DESC
+
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       const curMs = getMs(m);
-      if (i === 0 || (curMs - prevMs) >= HOUR_MS) {
+
+      // Skip separator before the very first (newest) message to avoid the bottom timestamp
+      if (i !== 0 && prevMs !== null && (prevMs - curMs) >= SEPARATOR_GAP_MS) {
         rows.push({ type: 'separator', key: `sep-${curMs}`, atMs: curMs });
       }
+
       rows.push({ type: 'message', ...m });
       prevMs = curMs;
     }
+
     return rows;
   }, [messages]);
 
+
+
+  // Load older (more historic) messages for DESC order
   const loadOlder = async () => {
     if (!threadId || !oldestCursor || loadingMore || !hasMore) return;
     try {
       setLoadingMore(true);
-      // Page older using the same 'createdAt' ordering (Timestamp)
       const olderQ = query(
         collection(firestore, 'dms', threadId, 'items'),
-        orderBy('createdAt', 'asc'),
-        endBefore(Timestamp.fromMillis(oldestCursor)),
-        limitToLast(PAGE)
+        orderBy('createdAt', 'desc'),
+        startAfter(Timestamp.fromMillis(oldestCursor)),
+        limit(PAGE)
       );
       const snap = await getDocs(olderQ);
       const older = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
       if (older.length === 0) { setHasMore(false); return; }
-      setMessages((prev) => [...older, ...prev]);
-      const first = older[0];
-      setOldestCursor(first ? getMs(first) : null);
+      setMessages((prev) => [...prev, ...older]); // append to END; inverted list will show them above
+      const last = older[older.length - 1];
+      setOldestCursor(last ? getMs(last) : null);
     } finally {
       setLoadingMore(false);
     }
@@ -195,7 +202,7 @@ export default function DMScreen() {
   const markThreadRead = async () => {
     if (!uid || !threadId) return;
     try {
-      const latest = messages[messages.length - 1];
+      const latest = messages[0]; // newest in DESC
       const latestMsgMs = latest ? getMs(latest) : 0;
       const safeSeen = Math.max(Date.now(), latestMsgMs);
       await setDoc(doc(firestore, 'dms', threadId), { [`lastSeen.${uid}`]: safeSeen }, { merge: true });
@@ -255,10 +262,9 @@ export default function DMScreen() {
   };
 
   useEffect(() => {
-    const latest = messages[messages.length - 1];
+    const latest = messages[0]; // newest in DESC
     const latestId = latest?.id ?? '__empty__';
     if (lastPreviewMsgIdRef.current !== latestId) {
-      // Only writes when the top-most message actually changes
       refreshThreadPreview();
     }
   }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -330,7 +336,7 @@ export default function DMScreen() {
     if (!threadId) return;
     try {
       await deleteDoc(doc(firestore, 'dms', threadId, 'items', msg.id));
-      await refreshThreadPreview(); // ensure chat list preview updates immediately
+      await refreshThreadPreview();
     } catch (e) {
       console.warn('deleteMessage failed:', e);
     } finally {
@@ -351,8 +357,8 @@ export default function DMScreen() {
       const payload: any = {
         text: trimmed,
         senderId: uid,
-        createdAt: serverTimestamp(), // ✅ TTL field
-        createdAtMs: now,             // ✅ instant UI math
+        createdAt: serverTimestamp(),
+        createdAtMs: now,
       };
       if (replyingTo) {
         payload.replyTo = {
@@ -381,7 +387,7 @@ export default function DMScreen() {
       setText('');
       setPickerOpen(false);
       setReplyingTo(null);
-      requestAnimationFrame(() => flatRef.current?.scrollToEnd({ animated: true }));
+      // No need to scroll manually with inverted list
     } catch (e) {
       console.warn('DM send failed:', e);
     } finally {
@@ -498,17 +504,14 @@ export default function DMScreen() {
         onRequestClose={() => setSelectedForReaction(null)}
       >
         <BlurView intensity={30} tint="dark" style={styles.reactionOverlay}>
-          {/* Tap outside to close */}
           <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
 
           {selectedForReaction && (
             <View style={styles.focusCard}>
-              {/* Accurate timestamp for THIS message */}
               <Text style={styles.modalTimestamp}>
                 {formatTimestamp(getMs(selectedForReaction), { includeDate: true, withSeconds: true })}
               </Text>
 
-              {/* Reaction row on TOP */}
               <View style={styles.reactionBarModal}>
                 {REACTION_SET.map((em) => (
                   <TouchableOpacity
@@ -521,13 +524,11 @@ export default function DMScreen() {
                 ))}
               </View>
 
-              {/* Focused message bubble */}
               <View style={[styles.bubble, selectedForReaction.senderId === uid ? styles.mine : styles.theirs]}>
                 {renderReplyPreview(selectedForReaction)}
                 <Text style={styles.text}>{selectedForReaction.text}</Text>
               </View>
 
-              {/* ACTION ROW: Reply / Delete */}
               <View style={styles.actionRow}>
                 <TouchableOpacity
                   style={styles.actionBtn}
@@ -548,7 +549,6 @@ export default function DMScreen() {
             </View>
           )}
 
-          {/* Tap outside to close (bottom spacer) */}
           <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
         </BlurView>
       </Modal>
@@ -567,10 +567,12 @@ export default function DMScreen() {
             <View style={{ width: 60 }} />
           </View>
 
-          {/* Messages (ASC). Load older near TOP; show banner at TOP */}
+          {/* Messages (DESC data, inverted list) */}
           <FlatList
             ref={flatRef}
-            data={displayRows}
+            data={displayRows} // newest first
+            inverted
+            maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
             keyExtractor={(row) => row.type === 'separator' ? row.key : row.id}
             onScroll={({ nativeEvent }) => {
               if (nativeEvent.contentOffset.y <= 24 && hasMore && !loadingMore) loadOlder();
@@ -579,7 +581,8 @@ export default function DMScreen() {
             keyboardShouldPersistTaps="always"
             style={{ flex: 1 }}
             contentContainerStyle={{ padding: 12 }}
-            ListHeaderComponent={
+            // With inverted lists, use ListFooterComponent for the "top" banner
+            ListFooterComponent={
               loadingMore ? (
                 <View style={{ paddingVertical: 10 }}><ActivityIndicator /></View>
               ) : !hasMore ? (
@@ -636,22 +639,24 @@ export default function DMScreen() {
           )}
 
           {/* Composer */}
-          <View style={styles.inputRow}>
+          <View style={[styles.inputRow, { paddingBottom: Math.max(4, insets.bottom * 0.5), paddingTop: 6 }]}>
             <TouchableOpacity onPress={() => setPickerOpen((v) => !v)} style={styles.emojiToggle}>
               <Text style={{ fontSize: 20 }}>😊</Text>
             </TouchableOpacity>
+
             <TextInput
               value={text}
               onChangeText={setText}
               placeholder={replyingTo ? 'Reply…' : 'Message…'}
               placeholderTextColor="#888"
-              style={[styles.input, { maxHeight: 120 }]}
+              style={styles.input}
               multiline
               blurOnSubmit={false}
               returnKeyType="default"
-              textAlignVertical="top" // Android: keep multi-line text aligned nicely
+              textAlignVertical="center"
               autoCapitalize="none"
             />
+
             <TouchableOpacity
               onPress={send}
               style={[styles.sendBtn, sendDisabled && { opacity: 0.5 }]}
@@ -776,12 +781,14 @@ const styles = StyleSheet.create({
   // Composer
   inputRow: {
     flexDirection: 'row',
-    padding: 10,
-    borderTopColor: '#222',
-    borderTopWidth: 1,
+    paddingHorizontal: 10,
     backgroundColor: '#111',
     alignItems: 'center',
+    minHeight: 34,
     gap: 8,
+    borderTopColor: '#222',
+    paddingVertical: 6,
+    borderTopWidth: 1,
   },
   emojiToggle: {
     width: 36,
