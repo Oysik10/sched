@@ -70,6 +70,8 @@ export default function ChatScreen() {
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<UserHit[]>([]);
+  const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
+
 
   // 🔹 Ref for the search input so we can blur it on screen focus
   const searchRef = useRef<TextInput>(null);
@@ -81,6 +83,37 @@ export default function ChatScreen() {
       return () => clearTimeout(id);
     }, [])
   );
+
+  useEffect(() => {
+    if (!uid) return;
+
+    const followersRef = collection(firestore, 'users', uid, 'followers');
+    const followingRef = collection(firestore, 'users', uid, 'following');
+
+    let followers = new Set<string>();
+    let following = new Set<string>();
+
+    const recompute = () => {
+      const mutuals = new Set<string>();
+      followers.forEach(id => { if (following.has(id)) mutuals.add(id); });
+      setFriendIds(mutuals);
+    };
+
+    const unsubFollowers = onSnapshot(followersRef, (snap) => {
+      followers = new Set(snap.docs.map(d => d.id));
+      recompute();
+    });
+
+    const unsubFollowing = onSnapshot(followingRef, (snap) => {
+      following = new Set(snap.docs.map(d => d.id));
+      recompute();
+    });
+
+    return () => {
+      unsubFollowers();
+      unsubFollowing();
+    };
+  }, [uid]);
 
   // Auth subscribe
   useEffect(() => {
@@ -179,7 +212,8 @@ export default function ChatScreen() {
         const snap = await getDocs(qy);
         const hits: UserHit[] = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .filter((u) => u.id !== uid);
+          .filter((u) => u.id !== uid)
+          .filter((u) => friendIds.has(u.id));
         if (!cancelled) setResults(hits);
       } catch (e) {
         if (!cancelled) setResults([]);
@@ -192,7 +226,7 @@ export default function ChatScreen() {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [search, uid]);
+  }, [search, uid, friendIds]);
   // --------------------------------------------------------
 
   const formatTimestamp = (ms?: number) => {
