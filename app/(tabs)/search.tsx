@@ -4,7 +4,7 @@ import {
   Keyboard, Pressable
 } from 'react-native';
 import {
-  collection, query, where, getDocs, doc, setDoc, deleteDoc
+  collection, query, where, getDocs, doc, setDoc, deleteDoc, onSnapshot
 } from 'firebase/firestore';
 import { firestore, auth } from '../../src/firebaseConfig';
 
@@ -26,19 +26,23 @@ export default function SearchUsersScreen() {
   }, []);
 
   useEffect(() => {
-    const fetchEdges = async () => {
-      const currentUid = auth.currentUser?.uid;
-      if (!currentUid) return;
+    const currentUid = auth.currentUser?.uid;
+    if (!currentUid) return;
 
-      const [followingSnap, followersSnap] = await Promise.all([
-        getDocs(collection(firestore, 'users', currentUid, 'following')),
-        getDocs(collection(firestore, 'users', currentUid, 'followers')),
-      ]);
+    const followingRef = collection(firestore, 'users', currentUid, 'following');
+    const followersRef = collection(firestore, 'users', currentUid, 'followers');
 
-      setFollowedUids(followingSnap.docs.map(d => d.id));
-      setFollowerUids(followersSnap.docs.map(d => d.id));
+    const unsubFollowing = onSnapshot(followingRef, (snap) => {
+      setFollowedUids(snap.docs.map(d => d.id));
+    });
+    const unsubFollowers = onSnapshot(followersRef, (snap) => {
+      setFollowerUids(snap.docs.map(d => d.id));
+    });
+
+    return () => {
+      unsubFollowing();
+      unsubFollowers();
     };
-    fetchEdges();
   }, []);
 
   const handleSearch = async () => {

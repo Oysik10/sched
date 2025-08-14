@@ -291,15 +291,35 @@ export default function ChatScreen() {
     const unread = item.lastSenderId !== uid && lastMsgMs > lastSeenMine;
 
     const handleOpenThread = async () => {
+      const now = Date.now();
+
+      // 1) Optimistically clear the dot locally so UI updates immediately
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === item.id
+            ? {
+                ...t,
+                lastSeen: { ...(t.lastSeen || {}), [uid]: now },
+              }
+            : t
+        )
+      );
+
+      // 2) Persist to Firestore; even if this is a tiny bit delayed,
+      //    your UI already reflects the read state
       try {
         await updateDoc(doc(firestore, 'dms', item.id), {
-          [`lastSeen.${uid}`]: Date.now(),
+          [`lastSeen.${uid}`]: now,
         });
       } catch (err) {
         console.warn('Error marking thread as read:', err);
+        // Optional: revert local optimistic update if you want
       }
+
+      // 3) Navigate to the DM
       router.push(`/dm/${otherId}`);
     };
+
 
     return (
       <TouchableOpacity
