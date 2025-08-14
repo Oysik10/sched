@@ -41,7 +41,7 @@ type Thread = {
   updatedAtMs?: number;
   lastSeen?: Record<string, number>;
   lastActivity?: {
-    type: 'message' | 'reaction';
+    type: 'message' | 'reaction' | 'report'; 
     actorId: string;
     emoji?: string;
     text?: string;
@@ -309,6 +309,9 @@ export default function ChatScreen() {
 
     const makePreview = () => {
       const act = item.lastActivity;
+        if (act?.type === 'report') {
+          return 'A message was reported';
+        }
       if (act?.type === 'reaction') {
         const actor = displayName(act.actorId);
         const em = act.emoji || '❤️';

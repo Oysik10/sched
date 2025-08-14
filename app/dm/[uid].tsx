@@ -22,11 +22,18 @@ type Msg = {
   id: string;
   text: string;
   senderId: string;
-  createdAt: any;            // Firestore Timestamp (TTL field)
-  createdAtMs?: number;      // local ms for UI math
+  createdAt: any;
+  createdAtMs?: number;
   reactions?: Record<string, string>;
   replyTo?: { msgId: string; text: string; senderId: string };
+  reported?: {
+    status: 'reported' | 'reviewed' | 'dismissed';
+    reportedBy: string[];         // who reported
+    reportedAtMs?: number;        // last report time
+    hiddenFor?: Record<string, boolean>; // per-user hide
+  };
 };
+
 
 const REACTION_SET = ['❤️','👍','😂','😮','😢','🔥','👏'] as const;
 const COMPOSER_EMOJI = ['😀','😂','😍','👍','🙏','🔥','❤️','🎉','😮','😢'] as const;
@@ -36,6 +43,7 @@ const PAGE = 40;
 function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
 }
+
 
 // Convert Timestamp | number to ms (fallback-safe)
 function toMs(val: any): number {
@@ -158,6 +166,54 @@ export default function DMScreen() {
     );
     return unsub;
   }, [threadId]);
+
+  const reportMessage = async (msg: Msg) => {
+  if (!uid || !threadId) return;
+  const now = Date.now();
+
+  const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
+
+  // 1) Create a separate report record (immutable evidence)
+  await addDoc(collection(firestore, 'reports'), {
+    type: 'dm_message',
+    threadId,
+    messageId: msg.id,
+    offenderId: msg.senderId,
+    reporterId: uid,
+    text: msg.text ?? '',
+    createdAtMs: now,
+    // Optional: include replyTo snapshot for context
+    replyTo: msg.replyTo ?? null,
+    status: 'open',
+  });
+
+  // 2) Mark the message as reported and hide it for the reporter
+  await setDoc(
+    mref,
+    {
+      reported: {
+        status: 'reported',
+        reportedAtMs: now,
+        // append reporter to list (idempotent-ish merge)
+        reportedBy: Array.from(new Set([...(msg.reported?.reportedBy ?? []), uid])),
+        hiddenFor: { ...(msg.reported?.hiddenFor ?? {}), [uid]: true },
+      },
+    },
+    { merge: true }
+  );
+
+  // 3) Optional: set a "system" lastActivity so inbox preview says reported
+  await setDoc(
+    doc(firestore, 'dms', threadId),
+    {
+      updatedAt: serverTimestamp(),
+      updatedAtMs: now,
+      lastActivity: { type: 'report', actorId: uid, text: 'A message was reported', atMs: now },
+    },
+    { merge: true }
+  );
+};
+
 
   // Build display rows with separators based on DESC data
   type Row =
@@ -544,7 +600,6 @@ export default function DMScreen() {
                 {renderReplyPreview(selectedForReaction)}
                 <Text style={styles.text}>{selectedForReaction.text}</Text>
               </View>
-
               <View style={styles.actionRow}>
                 <TouchableOpacity
                   style={styles.actionBtn}
@@ -553,6 +608,23 @@ export default function DMScreen() {
                   <Text style={styles.actionText}>Reply</Text>
                 </TouchableOpacity>
 
+                {/* Report button for other user's messages */}
+                {selectedForReaction.senderId !== uid && (
+                  <TouchableOpacity
+                    style={[styles.actionBtn, { backgroundColor: '#3a243a' }]}
+                    onPress={async () => {
+                      try {
+                        await reportMessage(selectedForReaction);
+                        setSelectedForReaction(null);
+                        Alert.alert('Reported', 'The message has been reported.');
+                      } catch (e) {
+                        Alert.alert('Error', 'Could not report the message. Try again.');
+                      }
+                    }}
+                  >
+                    <Text style={[styles.actionText, { color: '#fbcfe8' }]}>Report</Text>
+                  </TouchableOpacity>
+                )}
                 {selectedForReaction.senderId === uid && (
                   <TouchableOpacity
                     style={[styles.actionBtn, styles.actionDanger]}
@@ -562,6 +634,7 @@ export default function DMScreen() {
                   </TouchableOpacity>
                 )}
               </View>
+
             </View>
           )}
 
@@ -623,6 +696,26 @@ export default function DMScreen() {
               }
 
               const mine = item.senderId === uid;
+              const isHiddenForMe = !!item.reported?.hiddenFor?.[uid];
+              const isReported = item.reported?.status === 'reported';
+
+              <TouchableOpacity
+                activeOpacity={isHiddenForMe ? 1 : 0.8}
+                onLongPress={() => !isHiddenForMe && setSelectedForReaction(item)}
+                disabled={isHiddenForMe}
+                style={[styles.bubble, mine ? styles.mine : styles.theirs]}
+              >
+                {renderReplyPreview(item)}
+                {isHiddenForMe ? (
+                  <Text style={[mine ? styles.myText : styles.theirText, { opacity: 0.7, fontStyle: 'italic' }]}>
+                    This message was reported.
+                  </Text>
+                ) : (
+                  <Text style={mine ? styles.myText : styles.theirText}>
+                    {item.text}
+                  </Text>
+                )}
+              </TouchableOpacity>
               return (
                 <View style={styles.msgWrapper}>
                   <TouchableOpacity
