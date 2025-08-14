@@ -1,5 +1,5 @@
 // app/(tabs)/chat.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,8 @@ import {
   Alert,
   Platform,
   ActionSheetIOS,
+  Keyboard,
+  Pressable,
 } from 'react-native';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
@@ -28,7 +30,7 @@ import {
   limit as fsLimit,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 
 type Thread = {
   id: string;
@@ -56,22 +58,29 @@ type UserHit = {
 };
 
 export default function ChatScreen() {
-  // Auth-ready uid
   const [uid, setUid] = useState<string>('');
 
-  // Inbox threads
   const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Profile cache for display names
   const [profiles, setProfiles] = useState<
     Record<string, { username?: string; firstName?: string; lastName?: string }>
   >({});
 
-  // Search state
   const [search, setSearch] = useState('');
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<UserHit[]>([]);
+
+  // 🔹 Ref for the search input so we can blur it on screen focus
+  const searchRef = useRef<TextInput>(null);
+
+  // Always start with the search bar blurred when this screen becomes active
+  useFocusEffect(
+    useCallback(() => {
+      const id = setTimeout(() => searchRef.current?.blur(), 0);
+      return () => clearTimeout(id);
+    }, [])
+  );
 
   // Auth subscribe
   useEffect(() => {
@@ -79,20 +88,18 @@ export default function ChatScreen() {
     return unsub;
   }, []);
 
-  // Subscribe to my DM threads in real time
-// Subscribe to my DM threads in real time
+  // Subscribe to my DM threads in real time (order by "real" activity time)
   useEffect(() => {
     if (!uid) return;
     const qy = query(
       collection(firestore, 'dms'),
       where('participants', 'array-contains', uid),
-      orderBy('lastMessageAtMs', 'desc')   // 👈 was updatedAtMs
+      orderBy('lastMessageAtMs', 'desc')
     );
     const unsub = onSnapshot(
       qy,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Thread[];
-        // Safety: client-side tie-break in case some docs miss lastMessageAtMs
         list.sort(
           (a, b) =>
             (b.lastMessageAtMs ?? b.updatedAtMs ?? 0) -
@@ -108,7 +115,6 @@ export default function ChatScreen() {
     );
     return unsub;
   }, [uid]);
-
 
   // Fetch profiles for “other” participant(s) we don’t know yet
   useEffect(() => {
@@ -173,7 +179,7 @@ export default function ChatScreen() {
         const snap = await getDocs(qy);
         const hits: UserHit[] = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .filter((u) => u.id !== uid); // ← exclude yourself
+          .filter((u) => u.id !== uid);
         if (!cancelled) setResults(hits);
       } catch (e) {
         if (!cancelled) setResults([]);
@@ -189,12 +195,10 @@ export default function ChatScreen() {
   }, [search, uid]);
   // --------------------------------------------------------
 
-  // Format timestamp (date + time)
   const formatTimestamp = (ms?: number) => {
     if (!ms) return '';
     try {
       const d = new Date(ms);
-      // Example: Aug 13, 2025, 9:42 PM
       return d.toLocaleString(undefined, {
         year: 'numeric',
         month: 'short',
@@ -207,25 +211,16 @@ export default function ChatScreen() {
     }
   };
 
-  // Delete the entire thread and its messages (batched)
   const deleteConversation = async (threadId: string) => {
     try {
-      // 1) Delete messages in batches of 500
       const itemsRef = collection(firestore, 'dms', threadId, 'items');
-      // We only need an index to page; orderBy on __name__ works
-      // but since we didn't import orderBy here for items, use limit alone in simple batches.
-      // (Firestore allows limit queries without orderBy; it returns arbitrary pages—fine for deletion.)
-      // If you want deterministic, add orderBy('__name__') where supported.
       while (true) {
         const pageSnap = await getDocs(query(itemsRef, fsLimit(500)));
         if (pageSnap.empty) break;
         const batch = writeBatch(firestore);
         pageSnap.forEach((d) => batch.delete(d.ref));
         await batch.commit();
-        // loop until empty
       }
-
-      // 2) Delete the thread doc
       await deleteDoc(doc(firestore, 'dms', threadId));
     } catch (e) {
       console.warn('Failed to delete conversation:', e);
@@ -275,7 +270,6 @@ export default function ChatScreen() {
     }
   };
 
-  // Render a single thread row (other user’s name + last message + unread dot + timestamp + options)
   const renderThread = ({ item }: { item: Thread }) => {
     const otherId = (item.participants || []).find((p) => p !== uid) || '';
 
@@ -291,7 +285,6 @@ export default function ChatScreen() {
       return item.lastMessage || '—';
     };
 
-    // Prefer the true message time; fallback to updatedAtMs
     const lastMsgMs = item.lastMessageAtMs ?? item.updatedAtMs ?? 0;
     const lastText = makePreview();
     const lastSeenMine = item.lastSeen?.[uid] ?? 0;
@@ -314,16 +307,13 @@ export default function ChatScreen() {
         activeOpacity={0.7}
         onPress={handleOpenThread}
       >
-        {/* Avatar */}
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
             {displayName(otherId).replace(/^@/, '').slice(0, 1).toUpperCase()}
           </Text>
         </View>
 
-        {/* Main content */}
         <View style={{ flex: 1, minWidth: 0 }}>
-          {/* Top line: Name + unread dot + options button */}
           <View style={styles.topLine}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
               <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
@@ -339,7 +329,6 @@ export default function ChatScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Bottom line: preview (left) + timestamp (right) */}
           <View style={styles.bottomLine}>
             <Text
               style={[styles.lastText, unread && styles.lastTextUnread]}
@@ -356,12 +345,14 @@ export default function ChatScreen() {
     );
   };
 
-  // Render a user search hit (self is already excluded above)
   const renderUser = ({ item }: { item: UserHit }) => (
     <TouchableOpacity
       style={styles.row}
       activeOpacity={0.7}
-      onPress={() => router.push(`/dm/${item.id}`)}
+      onPress={() => {
+        Keyboard.dismiss(); // ensure search loses focus when navigating
+        router.push(`/dm/${item.id}`);
+      }}
     >
       <View style={styles.avatar}>
         <Text style={styles.avatarText}>
@@ -373,7 +364,6 @@ export default function ChatScreen() {
           <Text style={styles.name} numberOfLines={1}>
             {item.username ? `@${item.username}` : 'Unknown'}
           </Text>
-          {/* keep spacing consistent */}
           <Text style={styles.time} />
         </View>
         <View style={styles.bottomLine}>
@@ -397,21 +387,41 @@ export default function ChatScreen() {
   const showSearchResults = search.trim().length > 0;
 
   return (
-    <View style={styles.container}>
+    // 🔹 Press anywhere to dismiss the keyboard/cursor
+    <Pressable style={styles.container} onPress={Keyboard.dismiss}>
       {/* Search bar with @ prefix */}
       <View style={styles.searchRow}>
         <Text style={styles.atSymbol}>@</Text>
         <TextInput
-          style={styles.searchInput}
+          ref={searchRef}
+          style={[styles.searchInput, { paddingRight: 24 }]} // padding for X button space
           placeholder="Search username"
           placeholderTextColor="#888"
           value={search}
-          onChangeText={(v) => setSearch(v.replace(/\s/g, '').toLowerCase())} // no spaces + lowercase
+          onChangeText={(v) => setSearch(v.replace(/\s/g, '').toLowerCase())}
           autoCapitalize="none"
           autoCorrect={false}
           returnKeyType="search"
+          blurOnSubmit
+          onSubmitEditing={Keyboard.dismiss}
         />
+        {search.length > 0 && (
+          <TouchableOpacity
+            onPress={() => {
+              setSearch('');
+              router.replace('/chat'); // reloads ChatScreen fresh
+            }}
+            style={{
+              position: 'absolute',
+              right: 12,
+              padding: 4,
+            }}
+          >
+            <Text style={{ color: '#888', fontSize: 16 }}>×</Text>
+          </TouchableOpacity>
+        )}
       </View>
+
 
       {/* Results / Threads */}
       {showSearchResults ? (
@@ -425,6 +435,8 @@ export default function ChatScreen() {
             keyExtractor={(i) => i.id}
             renderItem={renderUser}
             contentContainerStyle={{ paddingHorizontal: 12 }}
+            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
           />
         )
       ) : threads.length === 0 ? (
@@ -437,9 +449,11 @@ export default function ChatScreen() {
           keyExtractor={(t) => t.id}
           renderItem={renderThread}
           contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8 }}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
         />
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -507,7 +521,7 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#3b82f6', // blue
+    backgroundColor: '#3b82f6',
     marginLeft: 6,
   },
   nameUnread: {
@@ -515,7 +529,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   lastTextUnread: {
-    color: '#dbeafe', // light blue
+    color: '#dbeafe',
   },
 
   // options button
