@@ -80,17 +80,24 @@ export default function ChatScreen() {
   }, []);
 
   // Subscribe to my DM threads in real time
+// Subscribe to my DM threads in real time
   useEffect(() => {
     if (!uid) return;
     const qy = query(
       collection(firestore, 'dms'),
       where('participants', 'array-contains', uid),
-      orderBy('updatedAtMs', 'desc')
+      orderBy('lastMessageAtMs', 'desc')   // 👈 was updatedAtMs
     );
     const unsub = onSnapshot(
       qy,
       (snap) => {
         const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Thread[];
+        // Safety: client-side tie-break in case some docs miss lastMessageAtMs
+        list.sort(
+          (a, b) =>
+            (b.lastMessageAtMs ?? b.updatedAtMs ?? 0) -
+            (a.lastMessageAtMs ?? a.updatedAtMs ?? 0)
+        );
         setThreads(list);
         setLoading(false);
       },
@@ -101,6 +108,7 @@ export default function ChatScreen() {
     );
     return unsub;
   }, [uid]);
+
 
   // Fetch profiles for “other” participant(s) we don’t know yet
   useEffect(() => {
