@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, FlatList, StyleSheet, TouchableOpacity, Alert,
+  Keyboard, Pressable
 } from 'react-native';
 import {
   collection, query, where, getDocs, doc, setDoc, deleteDoc
@@ -14,6 +15,15 @@ export default function SearchUsersScreen() {
 
   const [followedUids, setFollowedUids] = useState<string[]>([]);
   const [followerUids, setFollowerUids] = useState<string[]>([]);
+
+  // ref to manually blur the input on mount
+  const inputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    // start with cursor not in the search bar
+    const id = setTimeout(() => inputRef.current?.blur(), 0);
+    return () => clearTimeout(id);
+  }, []);
 
   useEffect(() => {
     const fetchEdges = async () => {
@@ -48,6 +58,12 @@ export default function SearchUsersScreen() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClear = () => {
+    setSearch('');
+    setResults([]);
+    Keyboard.dismiss(); // hide cursor immediately
   };
 
   const handleAddFriend = async (friendUid: string) => {
@@ -118,11 +134,14 @@ export default function SearchUsersScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    // Tap anywhere outside inputs to dismiss keyboard/cursor
+    <Pressable style={styles.container} onPress={Keyboard.dismiss}>
       <Text style={styles.title}>Search Users</Text>
+
       <View style={styles.searchRow}>
         <Text style={styles.atSymbol}>@</Text>
         <TextInput
+          ref={inputRef}
           style={styles.input}
           placeholder="Enter username"
           placeholderTextColor="#888"
@@ -131,11 +150,26 @@ export default function SearchUsersScreen() {
           onChangeText={(text) =>
             setSearch(text.replace(/\s/g, '').toLowerCase())
           }
-          onSubmitEditing={handleSearch}
+          onSubmitEditing={() => {
+            Keyboard.dismiss();
+            handleSearch();
+          }}
+          blurOnSubmit
         />
+
+        {/* × clear button */}
+        {search.length > 0 && (
+          <TouchableOpacity style={styles.clearButton} onPress={handleClear}>
+            <Text style={styles.clearButtonText}>×</Text>
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           style={styles.searchButton}
-          onPress={handleSearch}
+          onPress={() => {
+            Keyboard.dismiss();
+            handleSearch();
+          }}
         >
           <Text style={styles.searchIcon}>Search</Text>
         </TouchableOpacity>
@@ -149,47 +183,52 @@ export default function SearchUsersScreen() {
         <FlatList
           data={results}
           keyExtractor={(item) => item.id}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           renderItem={({ item }) => {
             const isFollowing = followedUids.includes(item.id);
             const isFollower = followerUids.includes(item.id);
             const isFriends = isFollowing && isFollower;
 
             return (
-              <View style={styles.userItem}>
-                <View style={styles.topRow}>
-                  <View>
-                    <Text style={styles.username}>@{item.username}</Text>
-                    <Text style={styles.details}>{item.firstName} {item.lastName}</Text>
-                  </View>
-                  {isFriends && (
-                    <View style={styles.friendsBadge}>
-                      <Text style={styles.friendsBadgeText}>Friends ✓</Text>
+              <TouchableOpacity activeOpacity={1} onPress={Keyboard.dismiss}>
+                <View style={styles.userItem}>
+                  <View style={styles.topRow}>
+                    <View>
+                      <Text style={styles.username}>@{item.username}</Text>
+                      <Text style={styles.details}>{item.firstName} {item.lastName}</Text>
                     </View>
-                  )}
-                </View>
+                    {isFriends && (
+                      <View style={styles.friendsBadge}>
+                        <Text style={styles.friendsBadgeText}>Friends ✓</Text>
+                      </View>
+                    )}
+                  </View>
 
-                <TouchableOpacity
-                  onPress={() => {
-                    if (isFriends) return handleUnfriend(item.id);
-                    if (isFollowing) return handleUnfollow(item.id);
-                    return handleAddFriend(item.id);
-                  }}
-                  style={[
-                    styles.addButton,
-                    isFriends && { backgroundColor: '#3cab5b' },
-                    !isFriends && isFollowing && { backgroundColor: '#444' },
-                  ]}
-                >
-                  <Text style={styles.addButtonText}>
-                    {isFriends ? 'Unfriend' : isFollowing ? 'Sent' : 'Send Friend Request'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
+                  <TouchableOpacity
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      if (isFriends) return handleUnfriend(item.id);
+                      if (isFollowing) return handleUnfollow(item.id);
+                      return handleAddFriend(item.id);
+                    }}
+                    style={[
+                      styles.addButton,
+                      isFriends && { backgroundColor: '#3cab5b' },
+                      !isFriends && isFollowing && { backgroundColor: '#444' },
+                    ]}
+                  >
+                    <Text style={styles.addButtonText}>
+                      {isFriends ? 'Unfriend' : isFollowing ? 'Sent' : 'Send Friend Request'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
             );
           }}
         />
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -209,6 +248,17 @@ const styles = StyleSheet.create({
   },
   atSymbol: { color: '#888', fontSize: 16, marginRight: 4 },
   input: { flex: 1, color: '#fff', fontSize: 16 },
+
+  // × clear button styling
+  clearButton: {
+    backgroundColor: '#2a2a2a',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    marginLeft: 6,
+  },
+  clearButtonText: { color: '#bbb', fontSize: 16, fontWeight: '600' },
+
   searchButton: {
     backgroundColor: '#3cab5b',
     paddingHorizontal: 10,
