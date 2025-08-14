@@ -3,6 +3,7 @@ import { View, Text, FlatList, StyleSheet, TouchableOpacity, ActivityIndicator, 
 import { collection, doc, onSnapshot, getDoc, writeBatch } from "firebase/firestore";
 import { firestore, auth } from "../src/firebaseConfig";
 import { router } from "expo-router"; 
+import { deleteDoc } from "firebase/firestore";
 
 type Friend = {
   id: string;
@@ -129,13 +130,35 @@ const FriendsScreen = () => {
           text: "Unfriend",
           style: "destructive",
           onPress: async () => {
-            const batch = writeBatch(firestore);
-            batch.delete(doc(firestore, "users", currentUid, "following", otherUid));
-            batch.delete(doc(firestore, "users", otherUid, "followers", currentUid));
-            batch.delete(doc(firestore, "users", otherUid, "following", currentUid));
-            batch.delete(doc(firestore, "users", currentUid, "followers", otherUid));
-            try { await batch.commit(); }
-            catch (e) { console.warn("Failed to unfriend:", e); }
+            try {
+              // First remove friendship both ways
+              const batch = writeBatch(firestore);
+              batch.delete(doc(firestore, "users", currentUid, "following", otherUid));
+              batch.delete(doc(firestore, "users", otherUid, "followers", currentUid));
+              batch.delete(doc(firestore, "users", otherUid, "following", currentUid));
+              batch.delete(doc(firestore, "users", currentUid, "followers", otherUid));
+              await batch.commit();
+
+              // Then delete any DM thread(s) with them
+              // Assumes threads are in `dms/{threadId}` where threadId is `${uid}_${otherUid}` or vice versa
+              const possibleIds = [
+                `${currentUid}_${otherUid}`,
+                `${otherUid}_${currentUid}`,
+              ];
+
+              for (const tid of possibleIds) {
+                const tRef = doc(firestore, "dms", tid);
+                const snap = await getDoc(tRef);
+                if (snap.exists()) {
+                  // Delete the thread doc (which also deletes messages if you use subcollections)
+                  await deleteDoc(tRef);
+                }
+              }
+
+              console.log(`Unfriended ${otherUid} and removed chat`);
+            } catch (e) {
+              console.warn("Failed to unfriend/delete chat:", e);
+            }
           },
         },
       ]

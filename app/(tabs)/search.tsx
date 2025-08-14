@@ -7,6 +7,7 @@ import {
   collection, query, where, getDocs, doc, setDoc, deleteDoc, onSnapshot
 } from 'firebase/firestore';
 import { firestore, auth } from '../../src/firebaseConfig';
+import { deleteDmBetween } from '../../src/dmUtils';
 
 export default function SearchUsersScreen() {
   const [search, setSearch] = useState('');
@@ -119,14 +120,21 @@ export default function SearchUsersScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Remove friendship in both directions
               await Promise.all([
                 deleteDoc(doc(firestore, 'users', currentUid, 'following', friendUid)),
                 deleteDoc(doc(firestore, 'users', friendUid, 'followers', currentUid)),
                 deleteDoc(doc(firestore, 'users', friendUid, 'following', currentUid)),
                 deleteDoc(doc(firestore, 'users', currentUid, 'followers', friendUid)),
               ]);
+
+              // Update local state
               setFollowedUids(prev => prev.filter(uid => uid !== friendUid));
               setFollowerUids(prev => prev.filter(uid => uid !== friendUid));
+
+              // Delete the DM thread + messages
+              await deleteDmBetween(currentUid, friendUid);
+
             } catch (err) {
               console.error('Unfriend error:', err);
               Alert.alert('Error', 'Could not unfriend.');
@@ -136,6 +144,7 @@ export default function SearchUsersScreen() {
       ]
     );
   };
+
 
   return (
     // Tap anywhere outside inputs to dismiss keyboard/cursor
