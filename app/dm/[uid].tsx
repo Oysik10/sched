@@ -631,7 +631,9 @@ export default function DMScreen() {
                     style={[styles.bubble, mine ? styles.mine : styles.theirs]}
                   >
                     {renderReplyPreview(item)}
-                    <Text style={styles.text}>{item.text}</Text>
+                    <Text style={mine ? styles.myText : styles.theirText}>
+                      {item.text}
+                    </Text>
                   </TouchableOpacity>
 
                   {renderReactionsSummary(item, mine)}
@@ -718,6 +720,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
+
   header: {
     height: 52,
     flexDirection: 'row',
@@ -771,15 +774,23 @@ const styles = StyleSheet.create({
   },
   mine: {
     alignSelf: 'flex-end',
-    backgroundColor: '#1e3a8a',
+    backgroundColor: '#1e3a8a', // your color for "me"
     borderTopRightRadius: 4,
   },
   theirs: {
     alignSelf: 'flex-start',
-    backgroundColor: '#333',
+    backgroundColor: '#333', // their bubble color
     borderTopLeftRadius: 4,
   },
-  text: { color: '#fff', fontSize: 16 },
+    text: { color: '#fff', fontSize: 16 },
+  myText: {
+    color: '#e0f2fe', // light bluish text for my messages
+    fontSize: 16
+  },
+  theirText: {
+    color: '#f1f5f9', // off-white text for their messages
+    fontSize: 16
+  },
 
   // Inline reactions summary bubble
   reactionsBubble: {
