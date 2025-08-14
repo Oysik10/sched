@@ -168,51 +168,64 @@ export default function DMScreen() {
   }, [threadId]);
 
   const reportMessage = async (msg: Msg) => {
-  if (!uid || !threadId) return;
-  const now = Date.now();
+    if (!uid || !threadId) return;
+    const now = Date.now();
+    const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
 
-  const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
+    // 1) Hide for reporter immediately (should be allowed by your DM rules)
+    try {
+      await setDoc(
+        mref,
+        {
+          reported: {
+            status: 'reported',
+            reportedAtMs: now,
+            // Keep this minimal to avoid rules conflicts while testing:
+            // You can add reportedBy later once rules are confirmed.
+            hiddenFor: { ...(msg.reported?.hiddenFor ?? {}), [uid]: true },
+          },
+        },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.log('[report/hide] failed:', e?.code, e?.message);
+      throw e; // if we can't hide, let the UI show the error
+    }
 
-  // 1) Create a separate report record (immutable evidence)
-  await addDoc(collection(firestore, 'reports'), {
-    type: 'dm_message',
-    threadId,
-    messageId: msg.id,
-    offenderId: msg.senderId,
-    reporterId: uid,
-    text: msg.text ?? '',
-    createdAtMs: now,
-    // Optional: include replyTo snapshot for context
-    replyTo: msg.replyTo ?? null,
-    status: 'open',
-  });
+    // 2) Best-effort: create /reports doc (may be denied if rules not deployed)
+    try {
+      await addDoc(collection(firestore, 'reports'), {
+        type: 'dm_message',
+        threadId,
+        messageId: msg.id,
+        offenderId: msg.senderId,
+        reporterId: uid,
+        text: msg.text ?? '',
+        createdAtMs: now,
+        replyTo: msg.replyTo ?? null,
+        status: 'open',
+      });
+    } catch (e: any) {
+      console.log('[report/log] failed (non-fatal):', e?.code, e?.message);
+      // do not rethrow — message already hidden for reporter
+    }
 
-  // 2) Mark the message as reported and hide it for the reporter
-  await setDoc(
-    mref,
-    {
-      reported: {
-        status: 'reported',
-        reportedAtMs: now,
-        // append reporter to list (idempotent-ish merge)
-        reportedBy: Array.from(new Set([...(msg.reported?.reportedBy ?? []), uid])),
-        hiddenFor: { ...(msg.reported?.hiddenFor ?? {}), [uid]: true },
-      },
-    },
-    { merge: true }
-  );
+    // 3) Update thread lastActivity so the inbox can show "A message was reported"
+    try {
+      await setDoc(
+        doc(firestore, 'dms', threadId),
+        {
+          updatedAt: serverTimestamp(),
+          updatedAtMs: now,
+          lastActivity: { type: 'report', actorId: uid, text: 'A message was reported', atMs: now },
+        },
+        { merge: true }
+      );
+    } catch (e: any) {
+      console.log('[report/thread lastActivity] failed (non-fatal):', e?.code, e?.message);
+    }
+  };
 
-  // 3) Optional: set a "system" lastActivity so inbox preview says reported
-  await setDoc(
-    doc(firestore, 'dms', threadId),
-    {
-      updatedAt: serverTimestamp(),
-      updatedAtMs: now,
-      lastActivity: { type: 'report', actorId: uid, text: 'A message was reported', atMs: now },
-    },
-    { merge: true }
-  );
-};
 
 
   // Build display rows with separators based on DESC data
@@ -697,42 +710,32 @@ export default function DMScreen() {
 
               const mine = item.senderId === uid;
               const isHiddenForMe = !!item.reported?.hiddenFor?.[uid];
-              const isReported = item.reported?.status === 'reported';
 
-              <TouchableOpacity
-                activeOpacity={isHiddenForMe ? 1 : 0.8}
-                onLongPress={() => !isHiddenForMe && setSelectedForReaction(item)}
-                disabled={isHiddenForMe}
-                style={[styles.bubble, mine ? styles.mine : styles.theirs]}
-              >
-                {renderReplyPreview(item)}
-                {isHiddenForMe ? (
-                  <Text style={[mine ? styles.myText : styles.theirText, { opacity: 0.7, fontStyle: 'italic' }]}>
-                    This message was reported.
-                  </Text>
-                ) : (
-                  <Text style={mine ? styles.myText : styles.theirText}>
-                    {item.text}
-                  </Text>
-                )}
-              </TouchableOpacity>
               return (
                 <View style={styles.msgWrapper}>
                   <TouchableOpacity
-                    activeOpacity={0.8}
-                    onLongPress={() => setSelectedForReaction(item)}
+                    activeOpacity={isHiddenForMe ? 1 : 0.8}
+                    onLongPress={() => !isHiddenForMe && setSelectedForReaction(item)}
+                    disabled={isHiddenForMe}
                     style={[styles.bubble, mine ? styles.mine : styles.theirs]}
                   >
                     {renderReplyPreview(item)}
-                    <Text style={mine ? styles.myText : styles.theirText}>
-                      {item.text}
-                    </Text>
+                    {isHiddenForMe ? (
+                      <Text style={[mine ? styles.myText : styles.theirText, { opacity: 0.7, fontStyle: 'italic' }]}>
+                        This message was reported.
+                      </Text>
+                    ) : (
+                      <Text style={mine ? styles.myText : styles.theirText}>
+                        {item.text}
+                      </Text>
+                    )}
                   </TouchableOpacity>
 
-                  {renderReactionsSummary(item, mine)}
+                  {!isHiddenForMe && renderReactionsSummary(item, mine)}
                 </View>
               );
             }}
+
           />
 
           {/* Composer banner for reply */}
