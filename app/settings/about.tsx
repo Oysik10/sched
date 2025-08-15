@@ -16,7 +16,7 @@ export default function AboutScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#000', padding: 14 },
+  screen: { flex: 1, backgroundColor: '#000', padding: 14, paddingTop: 50 },
   title: { color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 10 },
   text: { color: '#e5e7eb', lineHeight: 20 },
 });

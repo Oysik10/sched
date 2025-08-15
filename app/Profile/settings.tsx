@@ -61,15 +61,6 @@ export default function SettingsHome() {
   return (
     <View style={styles.screen}>
       <Text style={styles.title}>Settings</Text>
-
-      {/* Appearance */}
-      <Section title="Appearance">
-        <Row
-          label="Dark Mode"
-          right={<Switch value={darkMode} onValueChange={toggleDarkMode} />}
-        />
-      </Section>
-
       {/* Notifications */}
       <Section title="Notifications">
         <Row
@@ -97,7 +88,7 @@ export default function SettingsHome() {
         >
           <Text style={styles.link}>Legal</Text>
         </TouchableOpacity>
-              <TouchableOpacity
+                <TouchableOpacity
           onPress={() => router.push('../settings/about')}
           style={styles.linkRow}
         >
@@ -130,7 +121,7 @@ function Row({ label, sub, right }: { label: string; sub?: string; right?: React
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#000', padding: 14 },
+  screen: { flex: 1, backgroundColor: '#000', padding: 14, paddingTop: 50 },
   title: { color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 10 },
 
   section: { backgroundColor: '#0b0b0b', borderColor: '#222', borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 12 },
