@@ -1,9 +1,10 @@
 // app/(tabs)/home.tsx
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity } from 'react-native';
+import { View, Text, TouchableOpacity, SafeAreaView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../../src/firebaseConfig';
+import EphemeralMatchChat from '../../components/EphemeralMatchChat';
 
 function AdminButton() {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -17,8 +18,7 @@ function AdminButton() {
         setChecking(false);
         return;
       }
-      // refresh token so custom claims are included
-      const token = await u.getIdTokenResult(true);
+      const token = await u.getIdTokenResult(true); // refresh to get latest claims
       setIsAdmin(!!token.claims?.admin);
       setChecking(false);
     });
@@ -29,8 +29,8 @@ function AdminButton() {
 
   return (
     <TouchableOpacity
-      onPress={() => router.push('/admin/reports')} // use absolute path in Expo Router
-      style={{ padding: 10, backgroundColor: '#1f2937', borderRadius: 8, marginTop: 12 }}
+      onPress={() => router.push('/admin/reports')}
+      style={{ padding: 10, backgroundColor: '#1f2937', borderRadius: 8 }}
     >
       <Text style={{ color: '#fff', fontWeight: '700' }}>Open Admin Reports</Text>
     </TouchableOpacity>
@@ -39,10 +39,17 @@ function AdminButton() {
 
 export default function HomeScreen() {
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#000' }}>
-      <Text style={{ color: '#fff', marginBottom: 8 }}>🏠 Home Tab</Text>
-      {/* 👇 actually render the button */}
-      <AdminButton />
-    </View>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
+      {/* Header row */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12, backgroundColor: '#000' }}>
+        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700', marginBottom: 8 }}>🏠 Home</Text>
+        <AdminButton />
+      </View>
+
+      {/* Ephemeral match/chat fills the rest */}
+      <View style={{ flex: 1 }}>
+        <EphemeralMatchChat onExit={() => { /* e.g., router.back(); */ }} />
+      </View>
+    </SafeAreaView>
   );
 }
