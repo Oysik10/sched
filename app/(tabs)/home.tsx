@@ -5,6 +5,8 @@ import { useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../../src/firebaseConfig';
 import EphemeralMatchChat from '../../components/EphemeralMatchChat';
+import EphemeralMatchTile from '../../components/EphemeralMatchTile'; // adjust relative path as needed
+
 
 function AdminButton() {
   const [isAdmin, setIsAdmin] = useState(false);
@@ -48,7 +50,7 @@ export default function HomeScreen() {
 
       {/* Ephemeral match/chat fills the rest */}
       <View style={{ flex: 1 }}>
-        <EphemeralMatchChat onExit={() => { /* e.g., router.back(); */ }} />
+        <EphemeralMatchTile />
       </View>
     </SafeAreaView>
   );

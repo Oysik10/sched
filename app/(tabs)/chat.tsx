@@ -31,6 +31,7 @@ import {
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { router, useFocusEffect } from 'expo-router';
+import EphemeralMatchChat from '../../components/EphemeralMatchChat';
 
 type Thread = {
   id: string;
@@ -56,6 +57,149 @@ type UserHit = {
   firstName?: string;
   lastName?: string;
 };
+
+// ---- Anonymous Match Top Section (golden tile → go to DM) ----
+import { setDoc } from 'firebase/firestore'; // ensure this is imported at the top
+
+function todayKey() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function msLeft(expiresAt: any) {
+  if (!expiresAt || typeof expiresAt.toMillis !== 'function') return 0;
+  return expiresAt.toMillis() - Date.now();
+}
+
+function threadIdFor(a: string, b: string) {
+  return [a, b].sort().join('_');
+}
+
+function EphemeralMatchTopSection({ uid }: { uid: string }) {
+  const [loading, setLoading] = useState(true);
+  const [hasActiveMatch, setHasActiveMatch] = useState(false);
+  const [partnerUid, setPartnerUid] = useState<string>('');
+  const [alreadyAnswered, setAlreadyAnswered] = useState(false);
+
+  useEffect(() => {
+    if (!uid) { setLoading(false); return; }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        // 1) Find active unexpired match
+        const mQ = query(
+          collection(firestore, 'matches'),
+          where('participants', 'array-contains', uid),
+          where('active', '==', true)
+        );
+        const mSnap = await getDocs(mQ);
+
+        let active = false;
+        let other = '';
+        mSnap.forEach((d) => {
+          const data: any = d.data();
+          if (msLeft(data.expiresAt) > 0 && data.active === true) {
+            active = true;
+            other = (data.participants || []).find((p: string) => p !== uid) || '';
+          }
+        });
+
+        if (!cancelled) {
+          setHasActiveMatch(active);
+          setPartnerUid(other);
+        }
+
+        // 2) Check if questions done today
+        const uRef = doc(firestore, 'users', uid);
+        const uSnap = await getDoc(uRef);
+        const completedOn = uSnap.exists()
+          ? (uSnap.data()?.ephemeralQA?.completedOn as string | undefined)
+          : undefined;
+
+        if (!cancelled) {
+          setAlreadyAnswered(completedOn === todayKey());
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [uid]);
+
+  const onPressTile = async () => {
+    if (!uid) return;
+
+    // If there is an active match (and we know the partner), go straight to their DM
+    if (hasActiveMatch && partnerUid) {
+      try {
+        const tid = threadIdFor(uid, partnerUid);
+        await setDoc(
+          doc(firestore, 'dms', tid),
+          { participants: [uid, partnerUid].sort() },
+          { merge: true }
+        );
+      } catch {}
+      router.push(`/dm/${partnerUid}`);
+      return;
+    }
+
+    // Otherwise follow your gating flow:
+    // - If questions are completed today but no match yet, you may still want to
+    //   direct them to matching/chat flow — but since you asked to open DM only
+    //   when clicked, we’ll route to questions to complete gating / trigger match.
+    router.push('/match/questions');
+  };
+
+  return (
+    <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={onPressTile}
+        disabled={loading}
+        style={{
+          backgroundColor: '#CFAF45', // golden
+          borderRadius: 12,
+          padding: 12,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: '#d9c06a',
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={{ color: '#111', fontSize: 16, fontWeight: '800' }}>
+              Anonymous Match
+            </Text>
+            {loading ? (
+              <Text style={{ color: '#222', marginTop: 2 }}>Checking status…</Text>
+            ) : hasActiveMatch && partnerUid ? (
+              <Text style={{ color: '#222', marginTop: 2 }}>Tap to open your chat</Text>
+            ) : alreadyAnswered ? (
+              <Text style={{ color: '#222', marginTop: 2 }}>Questions done — tap to proceed</Text>
+            ) : (
+              <Text style={{ color: '#222', marginTop: 2 }}>Tap to answer quick questions & start</Text>
+            )}
+          </View>
+          <View style={{
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderRadius: 999,
+            backgroundColor: '#111'
+          }}>
+            <Text style={{ color: '#fff', fontWeight: '800' }}>
+              {loading ? '…' : (hasActiveMatch && partnerUid) ? 'Open' : 'Start'}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 
 export default function ChatScreen() {
   const [uid, setUid] = useState<string>('');
@@ -446,8 +590,11 @@ export default function ChatScreen() {
   return (
     // 🔹 Press anywhere to dismiss the keyboard/cursor
     <Pressable style={styles.container} onPress={Keyboard.dismiss}>
-      {/* Search bar with @ prefix */}
-      <View style={styles.searchRow}>
+        {/* Anonymous match lives at the very top (golden) */}
+        <EphemeralMatchTopSection uid={uid} />
+
+        {/* Search bar with @ prefix */}
+        <View style={styles.searchRow}>
         <Text style={styles.atSymbol}>@</Text>
         <TextInput
           ref={searchRef}
