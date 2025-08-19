@@ -28,10 +28,10 @@ import {
   deleteDoc,
   writeBatch,
   limit as fsLimit,
+  setDoc, // ✅ keep a single import here
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { router, useFocusEffect } from 'expo-router';
-import EphemeralMatchChat from '../../components/EphemeralMatchChat';
 
 type Thread = {
   id: string;
@@ -42,7 +42,7 @@ type Thread = {
   updatedAtMs?: number;
   lastSeen?: Record<string, number>;
   lastActivity?: {
-    type: 'message' | 'reaction' | 'report'; 
+    type: 'message' | 'reaction' | 'report';
     actorId: string;
     emoji?: string;
     text?: string;
@@ -59,13 +59,12 @@ type UserHit = {
 };
 
 // ---- Anonymous Match Top Section (golden tile → go to DM) ----
-import { setDoc } from 'firebase/firestore'; // ensure this is imported at the top
 
 function todayKey() {
   const d = new Date();
   const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2,'0');
-  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -85,7 +84,10 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
   const [alreadyAnswered, setAlreadyAnswered] = useState(false);
 
   useEffect(() => {
-    if (!uid) { setLoading(false); return; }
+    if (!uid) {
+      setLoading(false);
+      return;
+    }
 
     let cancelled = false;
     (async () => {
@@ -128,7 +130,9 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [uid]);
 
   const onPressTile = async () => {
@@ -148,10 +152,7 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
       return;
     }
 
-    // Otherwise follow your gating flow:
-    // - If questions are completed today but no match yet, you may still want to
-    //   direct them to matching/chat flow — but since you asked to open DM only
-    //   when clicked, we’ll route to questions to complete gating / trigger match.
+    // Otherwise, route to questions flow to start matching
     router.push('/match/questions');
   };
 
@@ -184,14 +185,16 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
               <Text style={{ color: '#222', marginTop: 2 }}>Tap to answer quick questions & start</Text>
             )}
           </View>
-          <View style={{
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            borderRadius: 999,
-            backgroundColor: '#111'
-          }}>
+          <View
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderRadius: 999,
+              backgroundColor: '#111',
+            }}
+          >
             <Text style={{ color: '#fff', fontWeight: '800' }}>
-              {loading ? '…' : (hasActiveMatch && partnerUid) ? 'Open' : 'Start'}
+              {loading ? '…' : hasActiveMatch && partnerUid ? 'Open' : 'Start'}
             </Text>
           </View>
         </View>
@@ -199,7 +202,6 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
     </View>
   );
 }
-
 
 export default function ChatScreen() {
   const [uid, setUid] = useState<string>('');
@@ -215,9 +217,9 @@ export default function ChatScreen() {
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<UserHit[]>([]);
   const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
+  const [matchedPartnerIds, setMatchedPartnerIds] = useState<Set<string>>(new Set()); // ✅ stays here
 
-
-  // 🔹 Ref for the search input so we can blur it on screen focus
+  // Ref for the search input so we can blur it on screen focus
   const searchRef = useRef<TextInput>(null);
 
   // Always start with the search bar blurred when this screen becomes active
@@ -228,6 +230,7 @@ export default function ChatScreen() {
     }, [])
   );
 
+  // Followers/following to compute mutuals
   useEffect(() => {
     if (!uid) return;
 
@@ -239,17 +242,19 @@ export default function ChatScreen() {
 
     const recompute = () => {
       const mutuals = new Set<string>();
-      followers.forEach(id => { if (following.has(id)) mutuals.add(id); });
+      followers.forEach((id) => {
+        if (following.has(id)) mutuals.add(id);
+      });
       setFriendIds(mutuals);
     };
 
     const unsubFollowers = onSnapshot(followersRef, (snap) => {
-      followers = new Set(snap.docs.map(d => d.id));
+      followers = new Set(snap.docs.map((d) => d.id));
       recompute();
     });
 
     const unsubFollowing = onSnapshot(followingRef, (snap) => {
-      following = new Set(snap.docs.map(d => d.id));
+      following = new Set(snap.docs.map((d) => d.id));
       recompute();
     });
 
@@ -265,7 +270,7 @@ export default function ChatScreen() {
     return unsub;
   }, []);
 
-  // Subscribe to my DM threads in real time (order by "real" activity time)
+  // Subscribe to my DM threads (order by activity time)
   useEffect(() => {
     if (!uid) return;
     const qy = query(
@@ -293,7 +298,7 @@ export default function ChatScreen() {
     return unsub;
   }, [uid]);
 
-  // Fetch profiles for “other” participant(s) we don’t know yet
+  // Fetch profiles for “other” participant(s)
   useEffect(() => {
     if (!uid || threads.length === 0) return;
     const needed = new Set<string>();
@@ -326,15 +331,48 @@ export default function ChatScreen() {
     };
   }, [threads, uid, profiles]);
 
+  // ✅ TOP-LEVEL: collect every partner ever matched with me (active or past)
+  useEffect(() => {
+    if (!uid) {
+      setMatchedPartnerIds(new Set());
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const mSnap = await getDocs(
+          query(collection(firestore, 'matches'), where('participants', 'array-contains', uid))
+        );
+        const setIds = new Set<string>();
+        mSnap.forEach((d) => {
+          const ps: string[] = (d.data() as any)?.participants || [];
+          const other = ps.find((p) => p !== uid);
+          if (other) setIds.add(other);
+        });
+        if (!cancelled) setMatchedPartnerIds(setIds);
+      } catch {
+        if (!cancelled) setMatchedPartnerIds(new Set());
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]);
+
   const displayName = (pid: string) => {
     if (pid === uid) return 'You';
+    // Inbox-only rule: if this is a matched partner, show Anonymous Match
+    if (matchedPartnerIds.has(pid)) return 'Anonymous Match';
+
     const p = profiles[pid] || {};
     if (p.username) return `@${p.username}`;
     const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
     return name || 'Unknown';
   };
 
-  // -------- Username search (debounced; ALWAYS exclude self) --------
+  // Username search (debounced; ALWAYS exclude self and non-mutuals)
   useEffect(() => {
     const term = search.trim().replace(/^@/, '').toLowerCase();
     if (!term) {
@@ -371,7 +409,6 @@ export default function ChatScreen() {
       clearTimeout(t);
     };
   }, [search, uid, friendIds]);
-  // --------------------------------------------------------
 
   const formatTimestamp = (ms?: number) => {
     if (!ms) return '';
@@ -453,9 +490,9 @@ export default function ChatScreen() {
 
     const makePreview = () => {
       const act = item.lastActivity;
-        if (act?.type === 'report') {
-          return 'A message was reported';
-        }
+      if (act?.type === 'report') {
+        return 'A message was reported';
+      }
       if (act?.type === 'reaction') {
         const actor = displayName(act.actorId);
         const em = act.emoji || '❤️';
@@ -474,7 +511,7 @@ export default function ChatScreen() {
     const handleOpenThread = async () => {
       const now = Date.now();
 
-      // 1) Optimistically clear the dot locally so UI updates immediately
+      // 1) Optimistically mark read locally
       setThreads((prev) =>
         prev.map((t) =>
           t.id === item.id
@@ -486,31 +523,26 @@ export default function ChatScreen() {
         )
       );
 
-      // 2) Persist to Firestore; even if this is a tiny bit delayed,
-      //    your UI already reflects the read state
+      // 2) Persist read state
       try {
         await updateDoc(doc(firestore, 'dms', item.id), {
           [`lastSeen.${uid}`]: now,
         });
       } catch (err) {
         console.warn('Error marking thread as read:', err);
-        // Optional: revert local optimistic update if you want
       }
 
       // 3) Navigate to the DM
       router.push(`/dm/${otherId}`);
     };
 
-
     return (
-      <TouchableOpacity
-        style={styles.row}
-        activeOpacity={0.7}
-        onPress={handleOpenThread}
-      >
+      <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={handleOpenThread}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {displayName(otherId).replace(/^@/, '').slice(0, 1).toUpperCase()}
+            {matchedPartnerIds.has(otherId)
+              ? 'A'
+              : displayName(otherId).replace(/^@/, '').slice(0, 1).toUpperCase()}
           </Text>
         </View>
 
@@ -531,10 +563,7 @@ export default function ChatScreen() {
           </View>
 
           <View style={styles.bottomLine}>
-            <Text
-              style={[styles.lastText, unread && styles.lastTextUnread]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.lastText, unread && styles.lastTextUnread]} numberOfLines={1}>
               {lastText}
             </Text>
             <Text style={styles.time} numberOfLines={1}>
@@ -551,7 +580,7 @@ export default function ChatScreen() {
       style={styles.row}
       activeOpacity={0.7}
       onPress={() => {
-        Keyboard.dismiss(); // ensure search loses focus when navigating
+        Keyboard.dismiss();
         router.push(`/dm/${item.id}`);
       }}
     >
@@ -588,17 +617,16 @@ export default function ChatScreen() {
   const showSearchResults = search.trim().length > 0;
 
   return (
-    // 🔹 Press anywhere to dismiss the keyboard/cursor
     <Pressable style={styles.container} onPress={Keyboard.dismiss}>
-        {/* Anonymous match lives at the very top (golden) */}
-        <EphemeralMatchTopSection uid={uid} />
+      {/* Anonymous match lives at the very top (golden) */}
+      <EphemeralMatchTopSection uid={uid} />
 
-        {/* Search bar with @ prefix */}
-        <View style={styles.searchRow}>
+      {/* Search bar with @ prefix */}
+      <View style={styles.searchRow}>
         <Text style={styles.atSymbol}>@</Text>
         <TextInput
           ref={searchRef}
-          style={[styles.searchInput, { paddingRight: 24 }]} // padding for X button space
+          style={[styles.searchInput, { paddingRight: 24 }]}
           placeholder="Search username"
           placeholderTextColor="#888"
           value={search}
@@ -613,26 +641,25 @@ export default function ChatScreen() {
           <TouchableOpacity
             onPress={() => {
               setSearch('');
-              router.replace('/chat'); // reloads ChatScreen fresh
+              router.replace('/chat');
             }}
-            style={{
-              position: 'absolute',
-              right: 12,
-              padding: 4,
-            }}
+            style={{ position: 'absolute', right: 12, padding: 4 }}
           >
             <Text style={{ color: '#888', fontSize: 16 }}>×</Text>
           </TouchableOpacity>
         )}
       </View>
 
-
       {/* Results / Threads */}
       {showSearchResults ? (
         searching ? (
-          <View style={styles.center}><ActivityIndicator /></View>
+          <View style={styles.center}>
+            <ActivityIndicator />
+          </View>
         ) : results.length === 0 ? (
-          <View style={styles.center}><Text style={{ color: '#888' }}>No users found.</Text></View>
+          <View style={styles.center}>
+            <Text style={{ color: '#888' }}>No users found.</Text>
+          </View>
         ) : (
           <FlatList
             data={results}

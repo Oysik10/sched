@@ -5,18 +5,18 @@ import {
   StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
   ScrollView, Modal, Alert
 } from 'react-native';
-import { useLocalSearchParams, router, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, router } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { BlurView } from 'expo-blur';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
   addDoc, collection, doc, getDoc, onSnapshot,
   orderBy, query, serverTimestamp, setDoc, updateDoc, deleteField,
-  limit, getDocs, deleteDoc, Timestamp, startAfter
+  limit, getDocs, deleteDoc, Timestamp, startAfter, where
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Keyboard, Pressable } from 'react-native';
-
 
 type Msg = {
   id: string;
@@ -28,24 +28,21 @@ type Msg = {
   replyTo?: { msgId: string; text: string; senderId: string };
   reported?: {
     status: 'reported' | 'reviewed' | 'dismissed';
-    reportedBy: string[];         // who reported
-    reportedAtMs?: number;        // last report time
-    hiddenFor?: Record<string, boolean>; // per-user hide
+    reportedBy: string[];
+    reportedAtMs?: number;
+    hiddenFor?: Record<string, boolean>;
   };
 };
 
-
 const REACTION_SET = ['❤️','👍','😂','😮','😢','🔥','👏'] as const;
 const COMPOSER_EMOJI = ['😀','😂','😍','👍','🙏','🔥','❤️','🎉','😮','😢'] as const;
-const HOUR_MS = 60 * 60 * 1000;
 const PAGE = 40;
+const HEADER_H = 52;
 
 function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
 }
 
-
-// Convert Timestamp | number to ms (fallback-safe)
 function toMs(val: any): number {
   if (typeof val === 'number') return val;
   if (val && typeof val.toMillis === 'function') return val.toMillis();
@@ -79,17 +76,21 @@ export default function DMScreen() {
   const [replyingTo, setReplyingTo] = useState<Msg | null>(null);
 
   const flatRef = useRef<FlatList>(null);
+  const initialScrolledRef = useRef(false);
   const lastPreviewMsgIdRef = useRef<string | null>(null);
   const [oldestCursor, setOldestCursor] = useState<number | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+
 
   const insets = useSafeAreaInsets();
-  const HEADER_H = 52;
-  const keyboardOffset = insets.top + HEADER_H;
+  // ✅ Header is INSIDE this screen, so we do NOT add any vertical offset here.
+  const keyboardOffset = 0;
+
+  // anonymous-match username hiding
+  const [hideUsernameForOther, setHideUsernameForOther] = useState(false);
 
   const getDisplayName = (u: string) => {
     if (u === uid) return 'You';
+    if (u === otherUid && hideUsernameForOther) return 'Anonymous Match';
     if (otherUid && u === otherUid) {
       const name =
         (otherProfile?.username && `@${otherProfile.username}`) ||
@@ -167,12 +168,31 @@ export default function DMScreen() {
     return unsub;
   }, [threadId]);
 
+  // Auto-scroll to bottom when the thread first loads / changes
+  useEffect(() => {
+    if (!messages.length) return;
+    if (!initialScrolledRef.current) {
+      requestAnimationFrame(() => {
+        flatRef.current?.scrollToIndex({ index: 0, animated: false });
+        initialScrolledRef.current = true;
+      });
+    }
+  }, [messages.length, threadId]);
+
+  // Also keep the bottom in view if keyboard opens (common chat UX)
+  useEffect(() => {
+    if (keyboardOpen && messages.length) {
+      requestAnimationFrame(() => {
+        flatRef.current?.scrollToIndex({ index: 0, animated: true });
+      });
+    }
+  }, [keyboardOpen, messages.length]);
+
   const reportMessage = async (msg: Msg) => {
     if (!uid || !threadId) return;
     const now = Date.now();
     const mref = doc(firestore, 'dms', threadId, 'items', msg.id);
 
-    // 1) Hide for reporter immediately (should be allowed by your DM rules)
     try {
       await setDoc(
         mref,
@@ -180,8 +200,6 @@ export default function DMScreen() {
           reported: {
             status: 'reported',
             reportedAtMs: now,
-            // Keep this minimal to avoid rules conflicts while testing:
-            // You can add reportedBy later once rules are confirmed.
             hiddenFor: { ...(msg.reported?.hiddenFor ?? {}), [uid]: true },
           },
         },
@@ -189,10 +207,9 @@ export default function DMScreen() {
       );
     } catch (e: any) {
       console.log('[report/hide] failed:', e?.code, e?.message);
-      throw e; // if we can't hide, let the UI show the error
+      throw e;
     }
 
-    // 2) Best-effort: create /reports doc (may be denied if rules not deployed)
     try {
       await addDoc(collection(firestore, 'reports'), {
         type: 'dm_message',
@@ -207,10 +224,8 @@ export default function DMScreen() {
       });
     } catch (e: any) {
       console.log('[report/log] failed (non-fatal):', e?.code, e?.message);
-      // do not rethrow — message already hidden for reporter
     }
 
-    // 3) Update thread lastActivity so the inbox can show "A message was reported"
     try {
       await setDoc(
         doc(firestore, 'dms', threadId),
@@ -226,38 +241,32 @@ export default function DMScreen() {
     }
   };
 
-
-
   // Build display rows with separators based on DESC data
   type Row =
     | { type: 'separator'; key: string; atMs: number }
     | ({ type: 'message' } & Msg);
 
-  const SEPARATOR_GAP_MS = 10 * 60 * 1000; // 10 minutes
+  const SEPARATOR_GAP_MS = 10 * 60 * 1000;
 
   const displayRows = useMemo<Row[]>(() => {
     const rows: Row[] = [];
-    let prevMs: number | null = null; // previous (newer) timestamp — messages are DESC
+    let prevMs: number | null = null;
 
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i];
       const curMs = getMs(m);
-
-      // Skip separator before the very first (newest) message to avoid the bottom timestamp
       if (i !== 0 && prevMs !== null && (prevMs - curMs) >= SEPARATOR_GAP_MS) {
         rows.push({ type: 'separator', key: `sep-${curMs}`, atMs: curMs });
       }
-
       rows.push({ type: 'message', ...m });
       prevMs = curMs;
     }
-
     return rows;
   }, [messages]);
 
-
-
-  // Load older (more historic) messages for DESC order
+  // Load older messages for DESC order
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const loadOlder = async () => {
     if (!threadId || !oldestCursor || loadingMore || !hasMore) return;
     try {
@@ -271,7 +280,7 @@ export default function DMScreen() {
       const snap = await getDocs(olderQ);
       const older = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
       if (older.length === 0) { setHasMore(false); return; }
-      setMessages((prev) => [...prev, ...older]); // append to END; inverted list will show them above
+      setMessages((prev) => [...prev, ...older]);
       const last = older[older.length - 1];
       setOldestCursor(last ? getMs(last) : null);
     } finally {
@@ -283,7 +292,7 @@ export default function DMScreen() {
   const markThreadRead = async () => {
     if (!uid || !threadId) return;
     try {
-      const latest = messages[0]; // newest in DESC
+      const latest = messages[0];
       const latestMsgMs = latest ? getMs(latest) : 0;
       const safeSeen = Math.max(Date.now(), latestMsgMs);
       await setDoc(doc(firestore, 'dms', threadId), { [`lastSeen.${uid}`]: safeSeen }, { merge: true });
@@ -301,7 +310,7 @@ export default function DMScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length]);
 
-  // Keep thread preview in sync if last message changes (e.g., TTL delete)
+  // Keep thread preview in sync if last message changes
   const refreshThreadPreview = async () => {
     if (!threadId) return;
     try {
@@ -343,7 +352,7 @@ export default function DMScreen() {
   };
 
   useEffect(() => {
-    const latest = messages[0]; // newest in DESC
+    const latest = messages[0];
     const latestId = latest?.id ?? '__empty__';
     if (lastPreviewMsgIdRef.current !== latestId) {
       refreshThreadPreview();
@@ -399,7 +408,7 @@ export default function DMScreen() {
     }
   };
 
-  // Message actions: Reply / Delete
+  // Message actions
   const startReply = (msg: Msg) => {
     setReplyingTo(msg);
     setSelectedForReaction(null);
@@ -426,7 +435,7 @@ export default function DMScreen() {
     }
   };
 
-  // Send (TTL-ready)
+  // Send
   const send = async () => {
     const trimmed = text.trim();
     if (!uid || !threadId || !trimmed) return;
@@ -451,7 +460,6 @@ export default function DMScreen() {
 
       await addDoc(collection(firestore, 'dms', threadId, 'items'), payload);
 
-      // Update thread preview
       await setDoc(
         doc(firestore, 'dms', threadId),
         {
@@ -468,37 +476,25 @@ export default function DMScreen() {
       setText('');
       setPickerOpen(false);
       setReplyingTo(null);
-      // No need to scroll manually with inverted list
+
+      // Always snap to newest after send
+      requestAnimationFrame(() => {
+        flatRef.current?.scrollToIndex({ index: 0, animated: true });
+      });
     } catch (e) {
       console.warn('DM send failed:', e);
     } finally {
       setSending(false);
     }
-    // Scroll to newest (index 0) after sending
-    requestAnimationFrame(() => {
-      flatRef.current?.scrollToIndex({ index: 0, animated: true });
-    });
   };
 
-  const displayName =
-    (otherProfile?.username && `@${otherProfile.username}`) ||
-    [otherProfile?.firstName, otherProfile?.lastName].filter(Boolean).join(' ') ||
-    'Chat';
-
-  if (!uid || !otherUid) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <Text style={{ color: '#888' }}>Sign in to chat.</Text>
-      </View>
-    );
-  }
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.center]}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
+  const headerTitle = hideUsernameForOther
+    ? 'Anonymous Match'
+    : (
+        (otherProfile?.username && `@${otherProfile.username}`) ||
+        [otherProfile?.firstName, otherProfile?.lastName].filter(Boolean).join(' ') ||
+        'Chat'
+      );
 
   const sendDisabled = !text.trim() || !threadId || sending;
 
@@ -544,6 +540,30 @@ export default function DMScreen() {
       </View>
     );
   };
+
+  // Hide username for matched partners
+  useEffect(() => {
+    if (!uid || !otherUid) { setHideUsernameForOther(false); return; }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const mSnap = await getDocs(
+          query(collection(firestore, 'matches'), where('participants', 'array-contains', uid))
+        );
+        let matched = false;
+        mSnap.forEach((d) => {
+          const ps: string[] = (d.data() as any)?.participants || [];
+          if (ps.includes(otherUid)) matched = true;
+        });
+        if (!cancelled) setHideUsernameForOther(matched);
+      } catch {
+        if (!cancelled) setHideUsernameForOther(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [uid, otherUid]);
 
   return (
     <>
@@ -621,7 +641,6 @@ export default function DMScreen() {
                   <Text style={styles.actionText}>Reply</Text>
                 </TouchableOpacity>
 
-                {/* Report button for other user's messages */}
                 {selectedForReaction.senderId !== uid && (
                   <TouchableOpacity
                     style={[styles.actionBtn, { backgroundColor: '#3a243a' }]}
@@ -647,17 +666,17 @@ export default function DMScreen() {
                   </TouchableOpacity>
                 )}
               </View>
-
             </View>
           )}
 
           <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
         </BlurView>
       </Modal>
+
       <KeyboardAvoidingView
-        style={styles.container}
+        style={[styles.container, { paddingTop: insets.top }]} // ✅ safe top, no arbitrary 40
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? keyboardOffset : 0}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? keyboardOffset : 0} // ✅ 0 offset
       >
         <View style={{ flex: 1 }}>
           {/* Header */}
@@ -665,7 +684,7 @@ export default function DMScreen() {
             <TouchableOpacity onPress={handleBack} style={{ paddingHorizontal: 10, paddingVertical: 6, width: 100 }}>
               <Text style={{ color: '#4f8ef7', fontWeight: '700' }}>‹ Back</Text>
             </TouchableOpacity>
-            <Text style={styles.title} numberOfLines={1}>{displayName}</Text>
+            <Text style={styles.title} numberOfLines={1}>{headerTitle}</Text>
             <View style={{ width: 60 }} />
           </View>
 
@@ -679,13 +698,18 @@ export default function DMScreen() {
             onScroll={({ nativeEvent }) => {
               if (nativeEvent.contentOffset.y <= 24 && hasMore && !loadingMore) loadOlder();
             }}
+            onContentSizeChange={() => {
+              // ensure latest is at bottom if we haven't scrolled yet
+              if (!initialScrolledRef.current && messages.length) {
+                flatRef.current?.scrollToIndex({ index: 0, animated: false });
+                initialScrolledRef.current = true;
+              }
+            }}
             scrollEventThrottle={16}
-            // 👇 these two make the keyboard dismiss when you drag or tap in the list
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             style={{ flex: 1 }}
             contentContainerStyle={{ padding: 12 }}
-            // With inverted lists, use ListFooterComponent for the "top" banner
             ListFooterComponent={
               loadingMore ? (
                 <View style={{ paddingVertical: 10 }}><ActivityIndicator /></View>
@@ -735,7 +759,6 @@ export default function DMScreen() {
                 </View>
               );
             }}
-
           />
 
           {/* Composer banner for reply */}
@@ -755,7 +778,7 @@ export default function DMScreen() {
           )}
 
           {/* Composer */}
-          <View style={[styles.inputRow, { paddingBottom: Math.max(4, insets.bottom * 0.5), paddingTop: 6 }]}>
+          <View style={[styles.inputRow, { paddingBottom: Math.max(6, insets.bottom ? insets.bottom * 0.25 : 6), paddingTop: 6 }]}>
             <TouchableOpacity onPress={() => setPickerOpen((v) => !v)} style={styles.emojiToggle}>
               <Text style={{ fontSize: 20 }}>😊</Text>
             </TouchableOpacity>
@@ -783,16 +806,14 @@ export default function DMScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-          
+
           {keyboardOpen && (
-            
-          <Pressable
-            onPress={Keyboard.dismiss}
-            style={styles.keyboardDismissOverlay}
-            // Make sure the composer is still tappable:
-            pointerEvents="auto"
-          />
-        )}
+            <Pressable
+              onPress={Keyboard.dismiss}
+              style={styles.keyboardDismissOverlay}
+              pointerEvents="auto"
+            />
+          )}
 
           {/* Simple emoji row for composing */}
           {pickerOpen && (
@@ -813,12 +834,11 @@ export default function DMScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
+  container: { flex: 1, backgroundColor: '#000' }, // paddingTop set dynamically
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-
   header: {
-    height: 52,
+    height: HEADER_H,
     flexDirection: 'row',
     alignItems: 'center',
     borderBottomColor: '#222',
@@ -855,12 +875,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 52,          // below your header height (HEADER_H = 52)
-    // leave space so the composer stays clickable; if your composer is ~56px tall:
-    bottom: 56,       // adjust if your composer height differs
-    backgroundColor: 'transparent', // or 'rgba(0,0,0,0.001)' to ensure touch capture
+    top: HEADER_H,
+    bottom: 56,
+    backgroundColor: 'transparent',
     zIndex: 50,
   },
+
   bubble: {
     paddingHorizontal: 12,
     paddingVertical: 8,
@@ -870,25 +890,18 @@ const styles = StyleSheet.create({
   },
   mine: {
     alignSelf: 'flex-end',
-    backgroundColor: '#1e3a8a', // your color for "me"
+    backgroundColor: '#1e3a8a',
     borderTopRightRadius: 4,
   },
   theirs: {
     alignSelf: 'flex-start',
-    backgroundColor: '#333', // their bubble color
+    backgroundColor: '#333',
     borderTopLeftRadius: 4,
   },
-    text: { color: '#fff', fontSize: 16 },
-  myText: {
-    color: '#e0f2fe', // light bluish text for my messages
-    fontSize: 16
-  },
-  theirText: {
-    color: '#f1f5f9', // off-white text for their messages
-    fontSize: 16
-  },
+  text: { color: '#fff', fontSize: 16 },
+  myText: { color: '#e0f2fe', fontSize: 16 },
+  theirText: { color: '#f1f5f9', fontSize: 16 },
 
-  // Inline reactions summary bubble
   reactionsBubble: {
     position: 'absolute',
     top: -10,
@@ -913,7 +926,6 @@ const styles = StyleSheet.create({
   },
   reactionText: { color: '#fff' },
 
-  // Reply preview inside bubbles
   replyPreview: {
     borderLeftWidth: 3,
     borderLeftColor: '#6b7280',
@@ -934,7 +946,7 @@ const styles = StyleSheet.create({
     gap: 6,
     borderTopColor: '#222',
     paddingVertical: 4,
-    borderTopWidth: 1 // smaller vertical padding
+    borderTopWidth: 1,
   },
   emojiToggle: {
     width: 30,
@@ -991,7 +1003,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#1a1a1a', alignItems: 'center', justifyContent: 'center',
   },
 
-  // Generic modal styles (details modal)
+  // Generic modal styles
   modalBackdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center',
   },
@@ -1013,7 +1025,6 @@ const styles = StyleSheet.create({
   modalClose: { marginTop: 10, alignItems: 'center' },
   modalCloseText: { color: '#9aa7b1' },
 
-  // Long-press overlay + focus card
   reactionOverlay: {
     flex: 1, justifyContent: 'center', paddingHorizontal: 24,
   },
@@ -1044,7 +1055,6 @@ const styles = StyleSheet.create({
   },
   reactionBtnModal: { paddingHorizontal: 6, paddingVertical: 2 },
 
-  // Action row under bubble
   actionRow: {
     marginTop: 10,
     flexDirection: 'row',
