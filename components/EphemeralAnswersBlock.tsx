@@ -137,7 +137,7 @@ export default function EphemeralAnswersBlock({
             <View
                 style={[
                 styles.answerBox,
-                { width: '70%' },
+                { width: '100%' },
                 (!done || answers[i] === 'Unanswered') && styles.answerBoxDim,
                 ]}
             >
