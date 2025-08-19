@@ -20,7 +20,7 @@ export default function MatchQuestionsScreen() {
 
   useEffect(() => {
     if (!uid) {
-      router.push('../login');
+      router.push('../src/index');
       return;
     }
 

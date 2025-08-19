@@ -122,7 +122,7 @@ export default function EphemeralMatchTile() {
 
   const go = async () => {
     if (!uid) {
-      router.push('../login');
+      router.push('../src/index');
       return;
     }
     // If we have an active match + partner, jump straight to DM
