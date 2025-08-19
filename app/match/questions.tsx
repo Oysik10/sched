@@ -219,15 +219,14 @@ export default function MatchQuestionsScreen() {
     }
     setSaving(true);
     try {
-      // Mark me as completed today (UTC)
       const uRef = doc(firestore, 'users', uid);
       await setDoc(
         uRef,
         {
           ephemeralQA: {
-            completedOn: dayKey,      // ✅ UTC day key
-            setKey: `day:${dayKey}`,  // optional: for audit/debug
-            // answers: answers,       // optional: persist if you want
+            completedOn: dayKey,
+            setKey: `day:${dayKey}`,
+            answers: questionSet.map((_, i) => (answers[i] ?? '').trim()),
           },
         },
         { merge: true }
