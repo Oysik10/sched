@@ -77,6 +77,17 @@ function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
 }
 
+// ✅ Helper: check if both users finished today's questions
+async function bothCompletedToday(uidA: string, uidB: string) {
+  const aRef = doc(firestore, 'users', uidA);
+  const bRef = doc(firestore, 'users', uidB);
+  const [aSnap, bSnap] = await Promise.all([getDoc(aRef), getDoc(bRef)]);
+  const aDone = aSnap.exists() && (aSnap.data()?.ephemeralQA?.completedOn === todayKey());
+  const bDone = bSnap.exists() && (bSnap.data()?.ephemeralQA?.completedOn === todayKey());
+  return [aDone, bDone] as const;
+}
+
+
 function EphemeralMatchTopSection({ uid }: { uid: string }) {
   const [loading, setLoading] = useState(true);
   const [hasActiveMatch, setHasActiveMatch] = useState(false);
@@ -135,26 +146,46 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
     };
   }, [uid]);
 
-  const onPressTile = async () => {
-    if (!uid) return;
+// ⛔ Gate the golden tile so it won't open DM unless both are done
+const onPressTile = async () => {
+  if (!uid) return;
 
-    // If there is an active match (and we know the partner), go straight to their DM
-    if (hasActiveMatch && partnerUid) {
-      try {
-        const tid = threadIdFor(uid, partnerUid);
-        await setDoc(
-          doc(firestore, 'dms', tid),
-          { participants: [uid, partnerUid].sort() },
-          { merge: true }
-        );
-      } catch {}
-      router.push(`/dm/${partnerUid}`);
+  // No active match → go start/continue questions
+  if (!hasActiveMatch || !partnerUid) {
+    router.push('/match/questions');
+    return;
+  }
+
+  // Active match → allow only if both finished today
+  try {
+    const [meDone, partnerDone] = await bothCompletedToday(uid, partnerUid);
+    if (!meDone) {
+      Alert.alert(
+        "Answer today’s quick questions",
+        "You need to finish today’s questions to access the anonymous chat.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Answer now", onPress: () => router.push('/match/questions') }
+        ]
+      );
+      return;
+    }
+    if (!partnerDone) {
+      Alert.alert("Almost there", "Your partner hasn’t finished today’s questions yet. The chat will appear once they’re done.");
       return;
     }
 
-    // Otherwise, route to questions flow to start matching
-    router.push('/match/questions');
-  };
+    // Both done → ensure thread exists then go to DM
+    try {
+      const tid = threadIdFor(uid, partnerUid);
+      await setDoc(doc(firestore, 'dms', tid), { participants: [uid, partnerUid].sort() }, { merge: true });
+    } catch {}
+    router.push(`/dm/${partnerUid}`);
+  } catch {
+    Alert.alert("Error", "Could not verify question status. Please try again.");
+  }
+};
+
 
   return (
     <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
@@ -509,25 +540,49 @@ export default function ChatScreen() {
     const unread = item.lastSenderId !== uid && lastMsgMs > lastSeenMine;
 
     const handleOpenThread = async () => {
+      const otherId = (item.participants || []).find((p) => p !== uid) || '';
+      if (!otherId) return;
+
+      // If this is an Anonymous Match thread, block unless both finished today
+      if (matchedPartnerIds.has(otherId)) {
+        try {
+          const [meDone, partnerDone] = await bothCompletedToday(uid, otherId);
+          if (!meDone) {
+            Alert.alert(
+              "Answer today’s quick questions",
+              "You need to finish today’s questions to access the anonymous chat.",
+              [
+                { text: "Cancel", style: "cancel" },
+                { text: "Answer now", onPress: () => router.push('/match/questions') }
+              ]
+            );
+            return;
+          }
+          if (!partnerDone) {
+            Alert.alert("Almost there", "Your partner hasn’t finished today’s questions yet. The chat will unlock once they’re done.");
+            return;
+          }
+          // else: both done → continue to open the thread
+        } catch {
+          Alert.alert("Error", "Could not verify question status. Please try again.");
+          return;
+        }
+      }
+
       const now = Date.now();
 
       // 1) Optimistically mark read locally
       setThreads((prev) =>
         prev.map((t) =>
           t.id === item.id
-            ? {
-                ...t,
-                lastSeen: { ...(t.lastSeen || {}), [uid]: now },
-              }
+            ? { ...t, lastSeen: { ...(t.lastSeen || {}), [uid]: now } }
             : t
         )
       );
 
       // 2) Persist read state
       try {
-        await updateDoc(doc(firestore, 'dms', item.id), {
-          [`lastSeen.${uid}`]: now,
-        });
+        await updateDoc(doc(firestore, 'dms', item.id), { [`lastSeen.${uid}`]: now });
       } catch (err) {
         console.warn('Error marking thread as read:', err);
       }
@@ -535,6 +590,7 @@ export default function ChatScreen() {
       // 3) Navigate to the DM
       router.push(`/dm/${otherId}`);
     };
+
 
     return (
       <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={handleOpenThread}>
