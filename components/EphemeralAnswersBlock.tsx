@@ -117,11 +117,11 @@ export default function EphemeralAnswersBlock({
     done: boolean;
     answers: string[];
     }) => (
-    <View style={[styles.sheetPage, { width: pageWidth }]}> {/* page matches viewport */}
+    <View style={[styles.sheetPage, { width: pageWidth }]}>
         <View
         style={[
             styles.tabInner,
-            { width: Math.min(Math.round(pageWidth * TAB_INNER_RATIO), MAX_TAB_WIDTH) }, // use pageWidth here
+            { width: Math.min(Math.round(pageWidth * TAB_INNER_RATIO), MAX_TAB_WIDTH) },
         ]}
         >
         <View style={styles.sheetHeader}>
@@ -157,6 +157,7 @@ export default function EphemeralAnswersBlock({
     );
 
 
+
   if (!uid || !partnerUid) return null;
 
   return (
@@ -178,6 +179,7 @@ export default function EphemeralAnswersBlock({
     <TabSheet label="Partner" done={partnerDone} answers={partnerAnswers} />
     <TabSheet label="You"     done={meDone}      answers={myAnswers} />
     </ScrollView>
+
 
 
 
