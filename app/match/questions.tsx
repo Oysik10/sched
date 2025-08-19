@@ -1,18 +1,23 @@
 // app/match/questions.tsx
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, SafeAreaView, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, SafeAreaView, Alert, TextInput, ScrollView } from 'react-native';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
   doc, getDoc, setDoc, collection, getDocs, query, where, Timestamp
 } from 'firebase/firestore';
 import { router } from 'expo-router';
 
-function todayKey() {
+function todayKeyUTC() {
   const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2,'0');
-  const dd = String(d.getDate()).padStart(2,'0');
-  return `${yyyy}-${mm}-${dd}`;
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`; // ✅ same “day” for everyone (UTC)
+}
+function msUntilNextUtcMidnight() {
+  const now = new Date();
+  const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0));
+  return next.getTime() - now.getTime();
 }
 
 type MatchDoc = {
@@ -26,9 +31,81 @@ function msLeft(expiresAt?: Timestamp | null) {
   if (!expiresAt) return 0;
   return expiresAt.toMillis() - Date.now();
 }
-
 function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
+}
+
+const QUESTION_POOL: string[] = [
+  "What's your hottest take on movies?",
+  "If your job were a dish, what would it be and why?",
+  "What's a famous dish from your culture?",
+  "What's a lesser-known fact about your country?",
+  "What's a stereotype about your culture?",
+  "What's a stereotype about your job?",
+  "Which popular movie do you think is mid, and why?",
+  "What's a tradition you wish more people knew about?",
+  "What holiday dish feels like home to you?",
+  "What's a stereotype about your culture that's actually false?",
+  "What word or phrase in your language do you say a lot, and what does it mean?",
+  "What local superstition do you kind of believe?",
+  "What law or custom where you live would outsiders find weird?",
+  "What local scam should visitors watch for?",
+  "What's your favorite rainy-day thing to do in your city?",
+  "What's a slang term only locals use, and what does it mean?",
+  "If your city were a smell, what would it be?",
+  "What's your favorite book (right now)?",
+  "Which movie do you wish you could see again for the first time, and why?",
+  "Which city surprised you, and how?",
+  "What souvenir do you actually use?",
+  "What's one rule you live by?",
+  "How would you define \"success\" in one sentence?",
+  "What's a red flag you ignore every time?",
+  "If your life were a genre, which would it be and why?",
+  "What's a smell that instantly teleports you somewhere?",
+  "What's the most \"you\" object on your desk, and why?",
+  "If you could be born into a different religion than your current one, which would it be and why?",
+  "Do you believe in a higher power? Why or why not (in one line)?",
+  "Fate, free will, or a messy mix—what do you lean toward, and why?",
+  "Do you think life has a purpose? Why or why not?",
+  "What's a small ritual that centers you?",
+  "What verse or quote stays with you?",
+  "What's a belief you've outgrown, and what replaced it?",
+  "What festival or holiday from your tradition would you share with everyone, and why?",
+  "What one-sentence blessing would you give a friend?"
+];
+
+
+/** Deterministic PRNG (seeded) so the same seed → same 3 questions */
+function xmur3(str: string) {
+  let h = 1779033703 ^ str.length;
+  for (let i = 0; i < str.length; i++) {
+    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function () {
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return (h ^= h >>> 16) >>> 0;
+  };
+}
+function mulberry32(a: number) {
+  return function () {
+    let t = (a += 0x6D2B79F5);
+    t = Math.imul(t ^ (t >>> 15), 1 | t);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function pickNDeterministic<T>(arr: T[], n: number, seedStr: string): T[] {
+  const seed = xmur3(seedStr)();
+  const rand = mulberry32(seed);
+  const idx = Array.from(arr.keys());
+  // Fisher–Yates with seeded RNG
+  for (let i = idx.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [idx[i], idx[j]] = [idx[j], idx[i]];
+  }
+  return idx.slice(0, Math.min(n, arr.length)).map((i) => arr[i]);
 }
 
 export default function MatchQuestionsScreen() {
@@ -42,13 +119,27 @@ export default function MatchQuestionsScreen() {
   const [expiresAt, setExpiresAt] = useState<Timestamp | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Daily (UTC) key for “same everywhere” questions
+  const [dayKey, setDayKey] = useState<string>(todayKeyUTC());
+
+  // Selected 3 questions + answers
+  const [questionSet, setQuestionSet] = useState<string[]>([]);
+  const [answers, setAnswers] = useState<Record<number, string>>({});
+
+  // Recompute dayKey at next UTC midnight (keeps the app fresh if left open)
+  useEffect(() => {
+    const ms = msUntilNextUtcMidnight();
+    const id = setTimeout(() => setDayKey(todayKeyUTC()), ms + 1000);
+    return () => clearTimeout(id);
+  }, [dayKey]);
+
   const refreshStatus = useCallback(async () => {
     if (!uid) return;
 
     // Load me
     const uRef = doc(firestore, 'users', uid);
     const uSnap = await getDoc(uRef);
-    const meCompleted = uSnap.exists() && (uSnap.data()?.ephemeralQA?.completedOn === todayKey());
+    const meCompleted = uSnap.exists() && (uSnap.data()?.ephemeralQA?.completedOn === dayKey);
     setMeDone(!!meCompleted);
 
     // Load active, unexpired match
@@ -76,16 +167,23 @@ export default function MatchQuestionsScreen() {
     if (foundActive && pUid) {
       const pRef = doc(firestore, 'users', pUid);
       const pSnap = await getDoc(pRef);
-      const pCompleted = pSnap.exists() && (pSnap.data()?.ephemeralQA?.completedOn === todayKey());
+      const pCompleted = pSnap.exists() && (pSnap.data()?.ephemeralQA?.completedOn === dayKey);
       setPartnerDone(!!pCompleted);
     } else {
       setPartnerDone(null);
     }
-  }, [uid]);
+  }, [uid, dayKey]);
+
+  // Compute the 3-question set (deterministic; same for everyone each UTC day)
+  const computeQuestionSet = useCallback(() => {
+    const seed = `day:${dayKey}`; // ✅ ONLY day in seed → same for all users
+    const selected = pickNDeterministic(QUESTION_POOL, 3, seed);
+    setQuestionSet(selected);
+    setAnswers({}); // reset local answers when day flips
+  }, [dayKey]);
 
   useEffect(() => {
     if (!uid) {
-      // Not signed in → send to your sign-in/home screen
       router.push('../src/index');
       return;
     }
@@ -99,37 +197,52 @@ export default function MatchQuestionsScreen() {
     })();
   }, [uid, refreshStatus]);
 
+  useEffect(() => {
+    computeQuestionSet();
+  }, [computeQuestionSet]);
+
   const ensureThreadIfBothDone = useCallback(async () => {
     if (!uid || !partnerUid) return;
     const tid = threadIdFor(uid, partnerUid);
     await setDoc(doc(firestore, 'dms', tid), { participants: [uid, partnerUid].sort() }, { merge: true });
   }, [uid, partnerUid]);
 
+  const allAnswered =
+    questionSet.length > 0 &&
+    questionSet.every((_, i) => (answers[i]?.trim().length ?? 0) > 0);
+
   const completeQuestions = async () => {
     if (!uid) return;
+    if (!allAnswered) {
+      Alert.alert('Almost there', 'Please answer all three questions.');
+      return;
+    }
     setSaving(true);
     try {
-      // Mark me as completed today
+      // Mark me as completed today (UTC)
       const uRef = doc(firestore, 'users', uid);
       await setDoc(
         uRef,
-        { ephemeralQA: { completedOn: todayKey() } },
+        {
+          ephemeralQA: {
+            completedOn: dayKey,      // ✅ UTC day key
+            setKey: `day:${dayKey}`,  // optional: for audit/debug
+            // answers: answers,       // optional: persist if you want
+          },
+        },
         { merge: true }
       );
 
       await refreshStatus();
 
-      // If we now have both done and an active match, create thread and go to Inbox
+      // If both are done and we have an active match → ensure thread and route to Inbox
       if (hasActiveMatch && partnerUid) {
-        const uNowSnap = await getDoc(uRef);
-        const meNowDone = uNowSnap.exists() && (uNowSnap.data()?.ephemeralQA?.completedOn === todayKey());
-
-        let partnerNowDone = false;
-        if (partnerUid) {
-          const pRef = doc(firestore, 'users', partnerUid);
-          const pSnap = await getDoc(pRef);
-          partnerNowDone = pSnap.exists() && (pSnap.data()?.ephemeralQA?.completedOn === todayKey());
-        }
+        const [meNowSnap, pSnap] = await Promise.all([
+          getDoc(uRef),
+          getDoc(doc(firestore, 'users', partnerUid)),
+        ]);
+        const meNowDone = meNowSnap.exists() && (meNowSnap.data()?.ephemeralQA?.completedOn === dayKey);
+        const partnerNowDone = pSnap.exists() && (pSnap.data()?.ephemeralQA?.completedOn === dayKey);
 
         if (meNowDone && partnerNowDone) {
           try { await ensureThreadIfBothDone(); } catch {}
@@ -139,7 +252,6 @@ export default function MatchQuestionsScreen() {
           Alert.alert("All set on your side", "We’ll show the chat in your Inbox once your partner finishes.");
         }
       } else {
-        // No active match yet; just let them know we're done for today.
         Alert.alert("You're done for today", "We’ll notify you if you get a match. You can check your Inbox anytime.");
       }
     } catch (e: any) {
@@ -162,7 +274,7 @@ export default function MatchQuestionsScreen() {
         "You need to finish today’s questions to access the anonymous chat.",
         [
           { text: "Cancel", style: "cancel" },
-          { text: "Answer now", onPress: completeQuestions }
+          { text: "Answer now", onPress: () => {} }
         ]
       );
       return;
@@ -201,7 +313,7 @@ export default function MatchQuestionsScreen() {
   return (
     <SafeAreaView style={{ flex: 1, padding: 16 }}>
       <Text style={styles.title}>Anonymous Match</Text>
-      <Text style={styles.sub}>Both participants must complete today’s quick questions to access the chat.</Text>
+      <Text style={styles.sub}>Both participants must complete them to access the chat.</Text>
 
       {/* Status panel */}
       <View style={styles.panel}>
@@ -222,7 +334,7 @@ export default function MatchQuestionsScreen() {
         )}
       </View>
 
-      {/* Tile (acts like the home tile) */}
+      {/* Tile */}
       <TouchableOpacity style={styles.tile} onPress={onPressTile} disabled={saving}>
         <View style={{ flex: 1 }}>
           <Text style={styles.tileTitle}>Anonymous Match</Text>
@@ -237,7 +349,7 @@ export default function MatchQuestionsScreen() {
               <Text style={styles.tileSub}>Done for today — we’ll notify you when matched</Text>
             )
           ) : (
-            <Text style={styles.tileSub}>Tap to answer quick questions & start</Text>
+            <Text style={styles.tileSub}>Answer today’s three quick questions below</Text>
           )}
         </View>
         <View style={styles.ctaPill}>
@@ -247,13 +359,29 @@ export default function MatchQuestionsScreen() {
         </View>
       </TouchableOpacity>
 
-      {/* Temporary questionnaire stub */}
+      {/* Questionnaire (3 per UTC day) */}
       {!meDone && (
-        <View style={{ marginTop: 16 }}>
-          <TouchableOpacity style={styles.primary} onPress={completeQuestions} disabled={saving}>
-            <Text style={styles.primaryText}>{saving ? 'Saving…' : 'Start & Complete (stub)'}</Text>
+        <ScrollView style={{ marginTop: 16 }} contentContainerStyle={{ paddingBottom: 24 }}>
+          {questionSet.map((q, i) => (
+            <View key={i} style={styles.qBlock}>
+              <Text style={styles.qText}>{i + 1}. {q}</Text>
+              <TextInput
+                style={styles.qInput}
+                value={answers[i] ?? ''}
+                onChangeText={(t) =>
+                  setAnswers((prev) => ({ ...prev, [i]: t }))
+                }
+                placeholder="Type your answer…"
+                placeholderTextColor="#999"
+                multiline
+              />
+            </View>
+          ))}
+
+          <TouchableOpacity style={[styles.primary, { marginTop: 8 }]} onPress={completeQuestions} disabled={saving}>
+            <Text style={styles.primaryText}>{saving ? 'Saving…' : 'Submit answers'}</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       )}
     </SafeAreaView>
   );
@@ -300,4 +428,24 @@ const styles = StyleSheet.create({
 
   primary: { backgroundColor: '#111', padding: 12, borderRadius: 12, alignItems: 'center' },
   primaryText: { color: '#fff', fontWeight: '700' },
+
+  qBlock: {
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    marginBottom: 12,
+  },
+  qText: { fontSize: 15, fontWeight: '600', color: '#111', marginBottom: 8 },
+  qInput: {
+    minHeight: 60,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#ccc',
+    borderRadius: 8,
+    padding: 10,
+    textAlignVertical: 'top',
+    color: '#111',
+    backgroundColor: '#fafafa',
+  },
 });

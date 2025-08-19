@@ -34,6 +34,26 @@ function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
 }
 
+async function bothCompletedToday(uidA: string, uidB: string, dayKey: string) {
+  const [aSnap, bSnap] = await Promise.all([
+    getDoc(doc(firestore, 'users', uidA)),
+    getDoc(doc(firestore, 'users', uidB)),
+  ]);
+  const aDone = aSnap.exists() && (aSnap.data()?.ephemeralQA?.completedOn === dayKey);
+  const bDone = bSnap.exists() && (bSnap.data()?.ephemeralQA?.completedOn === dayKey);
+  return [aDone, bDone] as const;
+}
+
+
+function todayKeyUTC() {
+  const d = new Date();
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+
 export default function EphemeralMatchTile() {
   const uid = auth.currentUser?.uid ?? null;
 
@@ -98,22 +118,18 @@ export default function EphemeralMatchTile() {
         }
 
         // --- Did user finish questions "today"? ---
-        const today = new Date();
-        const yyyy = today.getFullYear();
-        const mm = String(today.getMonth() + 1).padStart(2, '0');
-        const dd = String(today.getDate()).padStart(2, '0');
-        const todayKey = `${yyyy}-${mm}-${dd}`;
+      const todayKey = todayKeyUTC();
 
-        try {
-          const uRef = doc(firestore, 'users', uid);
-          const uSnap = await getDoc(uRef);
-          const completedOn = uSnap.exists()
-            ? (uSnap.data()?.ephemeralQA?.completedOn as string | undefined)
-            : undefined;
-          setAlreadyAnswered(completedOn === todayKey);
-        } catch {
-          setAlreadyAnswered(false);
-        }
+      try {
+        const uRef = doc(firestore, 'users', uid);
+        const uSnap = await getDoc(uRef);
+        const completedOn = uSnap.exists()
+          ? (uSnap.data()?.ephemeralQA?.completedOn as string | undefined)
+          : undefined;
+        setAlreadyAnswered(completedOn === todayKey);
+      } catch {
+        setAlreadyAnswered(false);
+      }
       } finally {
         setLoading(false);
       }
@@ -122,26 +138,43 @@ export default function EphemeralMatchTile() {
 
   const go = async () => {
     if (!uid) {
-      router.push('../app/index');
+      router.push('../src/index'); // adjust to your auth screen if needed
       return;
     }
-    // If we have an active match + partner, jump straight to DM
+
+    const dayKey = todayKeyUTC();
+
+    // If we have an active match + partner, only proceed if BOTH finished today's questions
     if (hasActiveMatch && partnerUid) {
+      const [meDone, partnerDone] = await bothCompletedToday(uid, partnerUid, dayKey);
+
+      if (!meDone) {
+        router.push('../match/questions');
+        return;
+      }
+      if (!partnerDone) {
+        // Optional: show a toast/alert instead of silent no-op
+        // Alert.alert("Almost there", "Your partner hasn’t finished today’s questions yet.");
+        return;
+      }
+
+      // Both done → ensure thread exists, then go to Inbox (not DM directly)
       try {
         const tid = threadIdFor(uid, partnerUid);
         await setDoc(doc(firestore, 'dms', tid), { participants: [uid, partnerUid].sort() }, { merge: true });
       } catch {}
-      router.push(`/dm/${partnerUid}`);
+      router.push('/(tabs)/chat');
       return;
     }
 
-    // Otherwise, follow your gate (questions → chat flow)
+    // No active match: follow the gate (questions → inbox)
     if (alreadyAnswered) {
-      router.push('../match/chat');
+      router.push('/(tabs)/chat');
     } else {
       router.push('../match/questions');
     }
   };
+
 
   // If match expired while on screen, clear the flag
   useEffect(() => {

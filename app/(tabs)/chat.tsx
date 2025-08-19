@@ -60,13 +60,15 @@ type UserHit = {
 
 // ---- Anonymous Match Top Section (golden tile → go to DM) ----
 
-function todayKey() {
+// replace their todayKey() with:
+function todayKeyUTC() {
   const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
+
 
 function msLeft(expiresAt: any) {
   if (!expiresAt || typeof expiresAt.toMillis !== 'function') return 0;
@@ -82,8 +84,8 @@ async function bothCompletedToday(uidA: string, uidB: string) {
   const aRef = doc(firestore, 'users', uidA);
   const bRef = doc(firestore, 'users', uidB);
   const [aSnap, bSnap] = await Promise.all([getDoc(aRef), getDoc(bRef)]);
-  const aDone = aSnap.exists() && (aSnap.data()?.ephemeralQA?.completedOn === todayKey());
-  const bDone = bSnap.exists() && (bSnap.data()?.ephemeralQA?.completedOn === todayKey());
+  const aDone = aSnap.exists() && (aSnap.data()?.ephemeralQA?.completedOn === todayKeyUTC());
+  const bDone = bSnap.exists() && (bSnap.data()?.ephemeralQA?.completedOn === todayKeyUTC());
   return [aDone, bDone] as const;
 }
 
@@ -134,7 +136,7 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
           : undefined;
 
         if (!cancelled) {
-          setAlreadyAnswered(completedOn === todayKey());
+          setAlreadyAnswered(completedOn === todayKeyUTC());
         }
       } finally {
         if (!cancelled) setLoading(false);
