@@ -1,20 +1,25 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+// components/EphemeralAnswersBlock.tsx
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
-  NativeScrollEvent,
   NativeSyntheticEvent,
+  NativeScrollEvent,
+  useWindowDimensions,
 } from 'react-native';
 import { auth, firestore } from '../src/firebaseConfig';
 import { doc, onSnapshot, DocumentSnapshot } from 'firebase/firestore';
 
 type Props = {
   partnerUid: string;
-  questionSet: string[]; // pass the 3 questions for today (UTC)
-  title?: string;        // optional header text
+  questionSet: string[]; // today's 3 questions (UTC)
+  title?: string;
 };
+
+const TAB_INNER_RATIO = 0.9;  // shrink tab content to 90% of screen
+const MAX_TAB_WIDTH   = 560;  // cap on tablets
 
 function todayKeyUTC() {
   const d = new Date();
@@ -29,37 +34,30 @@ function extractAnswersForDay(
   dayKey: string,
   count: number
 ): { completed: boolean; answers: string[] } {
-  if (!snap.exists()) {
-    return { completed: false, answers: Array(count).fill('Unanswered') };
-  }
-  // Flexible read: array or record
-  const data: any = snap.data();
-  const epi = data?.ephemeralQA || {};
+  if (!snap.exists()) return { completed: false, answers: Array(count).fill('Unanswered') };
+
+  const epi = (snap.data() as any)?.ephemeralQA || {};
   const completed = epi?.completedOn === dayKey;
 
+  const out = Array<string>(count).fill('Unanswered');
   const raw = epi?.answers;
-  const arr: string[] = Array(count).fill('Unanswered');
 
   if (raw && typeof raw === 'object') {
     if (Array.isArray(raw)) {
       for (let i = 0; i < Math.min(count, raw.length); i++) {
-        const v = (raw[i] ?? '').toString().trim();
-        if (v.length > 0) arr[i] = v;
+        const v = String(raw[i] ?? '').trim();
+        if (v) out[i] = v;
       }
     } else {
-      // record-like { 0: "...", 1: "...", 2: "..." }
       for (let i = 0; i < count; i++) {
-        const v = (raw[i] ?? '').toString().trim();
-        if (v.length > 0) arr[i] = v;
+        const v = String(raw[i] ?? '').trim();
+        if (v) out[i] = v;
       }
     }
   }
 
-  // If not completed for today, force all to "Unanswered"
-  if (!completed) {
-    return { completed: false, answers: Array(count).fill('Unanswered') };
-  }
-  return { completed: true, answers: arr };
+  if (!completed) return { completed: false, answers: Array(count).fill('Unanswered') };
+  return { completed: true, answers: out };
 }
 
 export default function EphemeralAnswersBlock({
@@ -69,19 +67,20 @@ export default function EphemeralAnswersBlock({
 }: Props) {
   const uid = auth.currentUser?.uid ?? '';
   const dayKey = todayKeyUTC();
-  const [page, setPage] = useState(0); // 0 = Partner, 1 = You
 
+  const [page, setPage] = useState(0); // 0 = Partner, 1 = You
   const [partnerAnswers, setPartnerAnswers] = useState<string[]>(
     Array(questionSet.length).fill('Unanswered')
   );
   const [myAnswers, setMyAnswers] = useState<string[]>(
     Array(questionSet.length).fill('Unanswered')
   );
-
   const [partnerDone, setPartnerDone] = useState(false);
   const [meDone, setMeDone] = useState(false);
 
-  // Live subscribe to both user docs
+  const { width } = useWindowDimensions(); 
+  const [pageWidth, setPageWidth] = useState(width); 
+
   useEffect(() => {
     if (!uid || !partnerUid) return;
 
@@ -103,72 +102,90 @@ export default function EphemeralAnswersBlock({
     };
   }, [uid, partnerUid, dayKey, questionSet.length]);
 
-  // For the header badge and hint
-  const headerLeft = useMemo(() => (page === 0 ? 'Partner' : 'Partner'), [page]);
-  const headerRight = useMemo(() => (page === 1 ? 'You' : 'You'), [page]);
-
   const onScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, layoutMeasurement } = e.nativeEvent;
     const newPage = Math.round(contentOffset.x / layoutMeasurement.width);
     setPage(newPage);
   };
 
-  if (!uid || !partnerUid) {
-    return null;
-  }
-
-  const renderSheet = (label: string, done: boolean, answers: string[]) => (
-    <View style={styles.sheet}>
-      <View style={styles.sheetHeader}>
-        <Text style={styles.sheetLabel}>{label}</Text>
-        <Text style={[styles.badge, done ? styles.badgeOk : styles.badgeWarn]}>
-          {done ? 'Done' : 'Unanswered'}
-        </Text>
-      </View>
-
-      {questionSet.map((q, i) => (
-        <View key={i} style={styles.qaBlock}>
-          <Text style={styles.qText}>{i + 1}. {q}</Text>
-          <View style={[styles.answerBox, !done || answers[i] === 'Unanswered' ? styles.answerBoxDim : null]}>
-            <Text style={[styles.answerText, !done || answers[i] === 'Unanswered' ? styles.answerTextDim : null]}>
-              {answers[i] || 'Unanswered'}
+    const TabSheet = ({
+    label,
+    done,
+    answers,
+    }: {
+    label: 'Partner' | 'You';
+    done: boolean;
+    answers: string[];
+    }) => (
+    <View style={[styles.sheetPage, { width: pageWidth }]}> {/* page matches viewport */}
+        <View
+        style={[
+            styles.tabInner,
+            { width: Math.min(Math.round(pageWidth * TAB_INNER_RATIO), MAX_TAB_WIDTH) }, // use pageWidth here
+        ]}
+        >
+        <View style={styles.sheetHeader}>
+            <Text style={styles.sheetLabel}>{label}</Text>
+            <Text style={[styles.badge, done ? styles.badgeOk : styles.badgeWarn]}>
+            {done ? 'Done' : 'Unanswered'}
             </Text>
-          </View>
         </View>
-      ))}
+
+        {questionSet.map((q, i) => (
+            <View key={i} style={styles.qaBlock}>
+            <Text style={styles.qText}>{i + 1}. {q}</Text>
+            <View
+                style={[
+                styles.answerBox,
+                { width: '70%' },
+                (!done || answers[i] === 'Unanswered') && styles.answerBoxDim,
+                ]}
+            >
+                <Text
+                style={[
+                    styles.answerText,
+                    (!done || answers[i] === 'Unanswered') && styles.answerTextDim,
+                ]}
+                >
+                {answers[i] || 'Unanswered'}
+                </Text>
+            </View>
+            </View>
+        ))}
+        </View>
     </View>
-  );
+    );
+
+
+  if (!uid || !partnerUid) return null;
 
   return (
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.titleRow}>
         <Text style={styles.title}>{title}</Text>
-        <Text style={styles.dayKey}>UTC {dayKey}</Text>
+        <Text style={styles.dayKey}>{dayKey}</Text>
       </View>
 
-      {/* Swipe hint / tabs */}
-      <View style={styles.tabRow}>
-        <Text style={[styles.tab, page === 0 && styles.tabActive]}>Partner</Text>
-        <Text style={styles.dot}>•</Text>
-        <Text style={[styles.tab, page === 1 && styles.tabActive]}>You</Text>
-        <Text style={styles.hint}>{page === 0 ? '  (swipe →)' : '  (← swipe back)'}</Text>
-      </View>
+      {/* Pager */}
+    <ScrollView
+    horizontal
+    pagingEnabled
+    showsHorizontalScrollIndicator={false}
+    onMomentumScrollEnd={onScrollEnd}
+    onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}
+    >
+    <TabSheet label="Partner" done={partnerDone} answers={partnerAnswers} />
+    <TabSheet label="You"     done={meDone}      answers={myAnswers} />
+    </ScrollView>
 
-      {/* Horizontal pager */}
-      <ScrollView
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={onScrollEnd}
-      >
-        <View style={{ width: '100%' }}>
-          {renderSheet('Partner', partnerDone, partnerAnswers)}
-        </View>
-        <View style={{ width: '100%' }}>
-          {renderSheet('You', meDone, myAnswers)}
-        </View>
-      </ScrollView>
+
+
+      {/* Bottom page indicator */}
+      <View style={styles.indicatorRow}>
+        <View style={[styles.indicatorDot, page === 0 && styles.indicatorActive]} />
+        <View style={[styles.indicatorDot, page === 1 && styles.indicatorActive]} />
+      </View>
     </View>
   );
 }
@@ -194,18 +211,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 16, fontWeight: '800', color: '#111' },
   dayKey: { fontSize: 12, color: '#666' },
 
-  tabRow: {
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  tab: { fontSize: 13, color: '#888', fontWeight: '700' },
-  tabActive: { color: '#111' },
-  dot: { marginHorizontal: 6, color: '#bbb' },
-  hint: { marginLeft: 6, color: '#999', fontSize: 12 },
+  sheetPage: { paddingBottom: 12 },
+  tabInner: { alignSelf: 'center', paddingHorizontal: 8 },
 
-  sheet: { paddingHorizontal: 12, paddingBottom: 12 },
   sheetHeader: {
     paddingVertical: 8,
     flexDirection: 'row',
@@ -225,6 +233,7 @@ const styles = StyleSheet.create({
   qText: { fontSize: 14, fontWeight: '600', color: '#111', marginBottom: 8 },
 
   answerBox: {
+    alignSelf: 'center',
     borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#ddd',
@@ -232,7 +241,6 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   answerBoxDim: { backgroundColor: '#f6f6f6' },
-
   answerText: { fontSize: 14, color: '#111' },
   answerTextDim: { color: '#999', fontStyle: 'italic' },
 
@@ -246,4 +254,19 @@ const styles = StyleSheet.create({
   },
   badgeOk: { backgroundColor: '#e6ffed', color: '#0a7f2e' },
   badgeWarn: { backgroundColor: '#fff5f5', color: '#a61b1b' },
+
+  indicatorRow: {
+    paddingVertical: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    flexDirection: 'row',
+  },
+  indicatorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#d6d6d6',
+  },
+  indicatorActive: { backgroundColor: '#111' },
 });
