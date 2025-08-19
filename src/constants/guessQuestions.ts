@@ -1,0 +1,17 @@
+export const GUESS_QUESTION_POOL: string[] = [
+  "What country is your match from?",
+  "Is your match an introvert, extrovert, or ambivert?",
+  "What’s your match’s first language?",
+  "What are your match’s spiritual/religious beliefs?",
+  "Which time zone is your match likely in?",
+  "What size place does your match live in: big city, small city, or rural?",
+  "Which cuisine would your match pick first?",
+  "How many languages do you think your match speaks?",
+  "Is your match an early bird or a night owl?",
+  "What kind of books (if any) does your match prefer: fiction, nonfiction, both, or audiobooks?",
+  "Movie taste: action, comedy, drama, horror, or rom-com—what fits your match?",
+  "Which music genre does your match play most?",
+  "Favorite sport to watch (if any) for your match?",
+  "If you had to guess, what hobby relaxes your match most?",
+  "Favorite season for your match: spring, summer, fall, or winter?",
+];

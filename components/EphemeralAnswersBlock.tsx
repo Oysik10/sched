@@ -113,7 +113,7 @@ export default function EphemeralAnswersBlock({
     done,
     answers,
     }: {
-    label: 'Partner' | 'You';
+    label: 'Match' | 'You';
     done: boolean;
     answers: string[];
     }) => (
@@ -176,7 +176,7 @@ export default function EphemeralAnswersBlock({
     onMomentumScrollEnd={onScrollEnd}
     onLayout={(e) => setPageWidth(e.nativeEvent.layout.width)}
     >
-    <TabSheet label="Partner" done={partnerDone} answers={partnerAnswers} />
+    <TabSheet label="Match" done={partnerDone} answers={partnerAnswers} />
     <TabSheet label="You"     done={meDone}      answers={myAnswers} />
     </ScrollView>
 
