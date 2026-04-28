@@ -13,15 +13,23 @@ export type JoinResult = {
   expiresAt?: string;
 };
 
+export type CancelResult = {
+  success: boolean;
+  banned: boolean;
+  cancellationsThisMonth: number;
+};
+
 export type PersistentMatchState = {
   loading: boolean;
   inQueue: boolean;
   hasMatch: boolean;
+  matchId: string;
   partnerUid: string;
   expiresAt: Timestamp | null;
   isExpired: boolean;
   joinQueue: () => Promise<JoinResult>;
   leaveQueue: () => Promise<void>;
+  cancelMatch: (reason: string) => Promise<CancelResult>;
 };
 
 export function usePersistentMatch(): PersistentMatchState {
@@ -29,24 +37,23 @@ export function usePersistentMatch(): PersistentMatchState {
   const [matchLoading, setMatchLoading] = useState(true);
   const [inQueue, setInQueue] = useState(false);
   const [hasMatch, setHasMatch] = useState(false);
+  const [matchId, setMatchId] = useState('');
   const [partnerUid, setPartnerUid] = useState('');
   const [expiresAt, setExpiresAt] = useState<Timestamp | null>(null);
   const [isExpired, setIsExpired] = useState(false);
 
-  // Auth listener
   useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? '')), []);
 
-  // Real-time listener: is user in the persistent match queue?
   useEffect(() => {
     if (!uid) { setInQueue(false); return; }
     const qRef = doc(firestore, 'persistentMatchQueue', uid);
     return onSnapshot(qRef, (snap) => setInQueue(snap.exists()), () => setInQueue(false));
   }, [uid]);
 
-  // Real-time listener: does user have an active match?
   useEffect(() => {
     if (!uid) {
       setHasMatch(false);
+      setMatchId('');
       setPartnerUid('');
       setExpiresAt(null);
       setIsExpired(false);
@@ -66,6 +73,7 @@ export function usePersistentMatch(): PersistentMatchState {
       (snap) => {
         const nowMs = Date.now();
         let found = false;
+        let mid = '';
         let partner = '';
         let exp: Timestamp | null = null;
 
@@ -75,12 +83,14 @@ export function usePersistentMatch(): PersistentMatchState {
           const expMs: number = data.expiresAt?.toMillis?.() ?? 0;
           if (expMs > nowMs) {
             found = true;
+            mid = d.id;
             partner = (data.participants as string[]).find((p) => p !== uid) ?? '';
             exp = data.expiresAt as Timestamp;
           }
         });
 
         setHasMatch(found);
+        setMatchId(mid);
         setPartnerUid(partner);
         setExpiresAt(exp);
         setIsExpired(false);
@@ -92,7 +102,6 @@ export function usePersistentMatch(): PersistentMatchState {
     return unsub;
   }, [uid]);
 
-  // Schedule a local isExpired flip when the expiresAt timestamp arrives
   useEffect(() => {
     if (!expiresAt) { setIsExpired(false); return; }
     const msLeft = expiresAt.toMillis() - Date.now();
@@ -115,14 +124,28 @@ export function usePersistentMatch(): PersistentMatchState {
     setInQueue(false);
   }, []);
 
+  const cancelMatch = useCallback(async (reason: string): Promise<CancelResult> => {
+    if (!matchId) throw new Error('No active match to cancel');
+    const fn = httpsCallable<object, CancelResult>(functions, 'cancelMatch');
+    const result = await fn({ matchId, reason });
+    // Optimistically clear match state
+    setHasMatch(false);
+    setMatchId('');
+    setPartnerUid('');
+    setExpiresAt(null);
+    return result.data;
+  }, [matchId]);
+
   return {
     loading: matchLoading,
     inQueue,
     hasMatch,
+    matchId,
     partnerUid,
     expiresAt,
     isExpired,
     joinQueue,
     leaveQueue,
+    cancelMatch,
   };
 }

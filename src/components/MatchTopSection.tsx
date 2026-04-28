@@ -1,10 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import {
+  View, Text, TouchableOpacity, StyleSheet, Alert,
+  Platform, ActionSheetIOS,
+} from 'react-native';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, Timestamp } from 'firebase/firestore';
 import { router } from 'expo-router';
 import { auth, firestore } from '../firebaseConfig';
 import { usePersistentMatch } from '../hooks/usePersistentMatch';
+
+const CANCEL_REASONS = [
+  'Inappropriate behavior',
+  'Not comfortable continuing',
+  'I know this person',
+  'Other',
+];
 
 function formatExpiry(ts: Timestamp): string {
   const msLeft = ts.toMillis() - Date.now();
@@ -20,7 +30,7 @@ function formatExpiry(ts: Timestamp): string {
 export function MatchTopSection() {
   const {
     loading, inQueue, hasMatch, partnerUid, expiresAt, isExpired,
-    joinQueue, leaveQueue,
+    joinQueue, leaveQueue, cancelMatch,
   } = usePersistentMatch();
   const [uid, setUid] = useState('');
   const [busy, setBusy] = useState(false);
@@ -46,9 +56,9 @@ export function MatchTopSection() {
     }
   };
 
-  const handleLeave = () => {
+  const handleLeaveQueue = () => {
     Alert.alert('Leave queue?', 'You will be removed from the matchmaking queue.', [
-      { text: 'Cancel', style: 'cancel' },
+      { text: 'Stay', style: 'cancel' },
       {
         text: 'Leave',
         style: 'destructive',
@@ -70,6 +80,67 @@ export function MatchTopSection() {
     router.push(`/dm/${partnerUid}`);
   };
 
+  // Step 2: confirm + execute cancellation once reason is chosen
+  const confirmCancel = (reason: string) => {
+    Alert.alert(
+      'Leave match?',
+      'This permanently deletes all messages between you and cannot be undone.',
+      [
+        { text: 'Keep match', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            setBusy(true);
+            try {
+              const result = await cancelMatch(reason);
+              if (result.banned) {
+                Alert.alert(
+                  'You have been banned',
+                  'You cancelled 3 matches this month. You cannot find new matches for 30 days.'
+                );
+              } else if (result.cancellationsThisMonth === 2) {
+                Alert.alert(
+                  'Warning',
+                  'This is your 2nd cancellation this month. One more will result in a 30-day ban.'
+                );
+              }
+            } catch (e: any) {
+              Alert.alert('Error', e?.message ?? 'Failed to leave match.');
+            } finally {
+              setBusy(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // Step 1: pick a reason
+  const handleLeaveMatch = () => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          title: 'Why are you leaving?',
+          options: [...CANCEL_REASONS, 'Cancel'],
+          cancelButtonIndex: CANCEL_REASONS.length,
+        },
+        (index) => {
+          if (index < CANCEL_REASONS.length) confirmCancel(CANCEL_REASONS[index]);
+        }
+      );
+    } else {
+      Alert.alert(
+        'Why are you leaving?',
+        undefined,
+        [
+          ...CANCEL_REASONS.map((r) => ({ text: r, onPress: () => confirmCancel(r) })),
+          { text: 'Cancel', style: 'cancel' as const },
+        ]
+      );
+    }
+  };
+
   const subtitle = () => {
     if (loading) return 'Checking status…';
     if (isExpired) return 'Your 3-day match has ended';
@@ -89,7 +160,7 @@ export function MatchTopSection() {
   const onPress = () => {
     if (loading || busy || isExpired) return;
     if (hasMatch) { handleOpenChat(); return; }
-    if (inQueue) { handleLeave(); return; }
+    if (inQueue) { handleLeaveQueue(); return; }
     handleJoin();
   };
 
@@ -122,6 +193,16 @@ export function MatchTopSection() {
           )}
         </View>
       </TouchableOpacity>
+
+      {hasMatch && !isExpired && !loading && (
+        <TouchableOpacity
+          onPress={handleLeaveMatch}
+          disabled={busy}
+          style={{ paddingTop: 6, alignItems: 'center' }}
+        >
+          <Text style={{ color: '#666', fontSize: 12 }}>Leave Match</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
