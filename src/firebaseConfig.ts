@@ -1,10 +1,9 @@
 import { initializeApp } from 'firebase/app';
-import {
- initializeAuth,
- getReactNativePersistence,
-} from 'firebase/auth';
-import { getAuth } from 'firebase/auth';
+import { initializeAuth } from 'firebase/auth';
+// @ts-ignore – getReactNativePersistence exists in the RN bundle but is missing from the firebase package wrapper types
+import { getReactNativePersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -23,5 +22,6 @@ const auth = initializeAuth(app, {
  persistence: getReactNativePersistence(AsyncStorage),
 });
 const firestore = getFirestore(app);
-export { auth, app, firestore };
+const functions = getFunctions(app, 'us-central1');
+export { auth, app, firestore, functions };
 export const db = getFirestore(app);

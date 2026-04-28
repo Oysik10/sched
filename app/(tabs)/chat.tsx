@@ -1,5 +1,5 @@
 // app/(tabs)/chat.tsx
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -25,10 +25,10 @@ import {
   deleteDoc,
   writeBatch,
   limit as fsLimit,
-  setDoc,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { router } from 'expo-router';
+import { MatchTopSection } from '../../src/components/MatchTopSection';
 
 type Thread = {
   id: string;
@@ -47,183 +47,6 @@ type Thread = {
   };
   lastMessageAtMs?: number;
 };
-
-// ---------- Anonymous Match Top Section helpers ----------
-
-function todayKeyUTC() {
-  const d = new Date();
-  const yyyy = d.getUTCFullYear();
-  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-function msLeft(expiresAt: any) {
-  if (!expiresAt || typeof expiresAt.toMillis !== 'function') return 0;
-  return expiresAt.toMillis() - Date.now();
-}
-
-function threadIdFor(a: string, b: string) {
-  return [a, b].sort().join('_');
-}
-
-// Check if both users finished today's questions
-async function bothCompletedToday(uidA: string, uidB: string) {
-  const aRef = doc(firestore, 'users', uidA);
-  const bRef = doc(firestore, 'users', uidB);
-  const [aSnap, bSnap] = await Promise.all([getDoc(aRef), getDoc(bRef)]);
-  const aDone = aSnap.exists() && (aSnap.data()?.ephemeralQA?.completedOn === todayKeyUTC());
-  const bDone = bSnap.exists() && (bSnap.data()?.ephemeralQA?.completedOn === todayKeyUTC());
-  return [aDone, bDone] as const;
-}
-
-function EphemeralMatchTopSection({ uid }: { uid: string }) {
-  const [loading, setLoading] = useState(true);
-  const [hasActiveMatch, setHasActiveMatch] = useState(false);
-  const [partnerUid, setPartnerUid] = useState<string>('');
-  const [alreadyAnswered, setAlreadyAnswered] = useState(false);
-
-  useEffect(() => {
-    if (!uid) {
-      setLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    (async () => {
-      try {
-        // 1) Find active unexpired match
-        const mQ = query(
-          collection(firestore, 'matches'),
-          where('participants', 'array-contains', uid),
-          where('active', '==', true)
-        );
-        const mSnap = await getDocs(mQ);
-
-        let active = false;
-        let other = '';
-        mSnap.forEach((d) => {
-          const data: any = d.data();
-          if (msLeft(data.expiresAt) > 0 && data.active === true) {
-            active = true;
-            other = (data.participants || []).find((p: string) => p !== uid) || '';
-          }
-        });
-
-        if (!cancelled) {
-          setHasActiveMatch(active);
-          setPartnerUid(other);
-        }
-
-        // 2) Check if questions done today
-        const uRef = doc(firestore, 'users', uid);
-        const uSnap = await getDoc(uRef);
-        const completedOn = uSnap.exists()
-          ? (uSnap.data()?.ephemeralQA?.completedOn as string | undefined)
-          : undefined;
-
-        if (!cancelled) {
-          setAlreadyAnswered(completedOn === todayKeyUTC());
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [uid]);
-
-  // Gate the golden tile so it won't open DM unless both are done
-  const onPressTile = async () => {
-    if (!uid) return;
-
-    // No active match → go start/continue questions
-    if (!hasActiveMatch || !partnerUid) {
-      router.push('/match/questions');
-      return;
-    }
-
-    // Active match → allow only if both finished today
-    try {
-      const [meDone, partnerDone] = await bothCompletedToday(uid, partnerUid);
-      if (!meDone) {
-        Alert.alert(
-          "Answer today’s quick questions",
-          "You need to finish today’s questions to access the anonymous chat.",
-          [
-            { text: "Cancel", style: "cancel" },
-            { text: "Answer now", onPress: () => router.push('/match/questions') }
-          ]
-        );
-        return;
-      }
-      if (!partnerDone) {
-        Alert.alert(
-          "Almost there",
-          "Your partner hasn’t finished today’s questions yet. The chat will appear once they’re done."
-        );
-        return;
-      }
-
-      // Both done → ensure thread exists then go to DM
-      try {
-        const tid = threadIdFor(uid, partnerUid);
-        await setDoc(doc(firestore, 'dms', tid), { participants: [uid, partnerUid].sort() }, { merge: true });
-      } catch {}
-      router.push(`/dm/${partnerUid}`);
-    } catch {
-      Alert.alert("Error", "Could not verify question status. Please try again.");
-    }
-  };
-
-  return (
-    <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
-      <TouchableOpacity
-        activeOpacity={0.85}
-        onPress={onPressTile}
-        disabled={loading}
-        style={{
-          backgroundColor: '#CFAF45', // golden
-          borderRadius: 12,
-          padding: 12,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: '#d9c06a',
-        }}
-      >
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text style={{ color: '#111', fontSize: 16, fontWeight: '800' }}>
-              Anonymous Match
-            </Text>
-            {loading ? (
-              <Text style={{ color: '#222', marginTop: 2 }}>Checking status…</Text>
-            ) : hasActiveMatch && partnerUid ? (
-              <Text style={{ color: '#222', marginTop: 2 }}>Tap to open your chat</Text>
-            ) : alreadyAnswered ? (
-              <Text style={{ color: '#222', marginTop: 2 }}>Questions done — tap to proceed</Text>
-            ) : (
-              <Text style={{ color: '#222', marginTop: 2 }}>Tap to answer quick questions & start</Text>
-            )}
-          </View>
-          <View
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 8,
-              borderRadius: 999,
-              backgroundColor: '#111',
-            }}
-          >
-            <Text style={{ color: '#fff', fontWeight: '800' }}>
-              {loading ? '…' : hasActiveMatch && partnerUid ? 'Open' : 'Start'}
-            </Text>
-          </View>
-        </View>
-      </TouchableOpacity>
-    </View>
-  );
-}
 
 // ---------- Main Chat Screen (ONLY anonymous matches) ----------
 
@@ -450,33 +273,6 @@ export default function ChatScreen() {
     const handleOpenThread = async () => {
       if (!otherId) return;
 
-      // ✅ This thread is already guaranteed to be a matched partner (see visibleThreads),
-      // but we still gate by daily questions:
-      try {
-        const [meDone, partnerDone] = await bothCompletedToday(uid, otherId);
-        if (!meDone) {
-          Alert.alert(
-            "Answer today’s quick questions",
-            "You need to finish today’s questions to access the anonymous chat.",
-            [
-              { text: "Cancel", style: "cancel" },
-              { text: "Answer now", onPress: () => router.push('/match/questions') }
-            ]
-          );
-          return;
-        }
-        if (!partnerDone) {
-          Alert.alert(
-            "Almost there",
-            "Your partner hasn’t finished today’s questions yet. The chat will unlock once they’re done."
-          );
-          return;
-        }
-      } catch {
-        Alert.alert("Error", "Could not verify question status. Please try again.");
-        return;
-      }
-
       const now = Date.now();
 
       // 1) Optimistically mark read locally
@@ -554,7 +350,7 @@ export default function ChatScreen() {
   return (
     <View style={styles.container}>
       {/* Anonymous match tile at top */}
-      <EphemeralMatchTopSection uid={uid} />
+      <MatchTopSection />
 
       {/* No search bar, no username search, no friend DMing */}
 

@@ -11,6 +11,7 @@ import {
 
 import { useDailyQuestions } from '../../src/hooks/useDailyQuestions';
 import { todayKeyUTC } from '../../src/utils/day';
+import { MatchTopSection } from '../../src/components/MatchTopSection';
 
 /* ---------------- Admin button (unchanged) ---------------- */
 function AdminButton() {
@@ -119,11 +120,11 @@ export default function HomeScreen() {
   }, [pending?.matchId, pending?.status, partnerUid, router]);
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
-      {/* Header */}
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
       <View>
         <AdminButton />
       </View>
+      <MatchTopSection />
     </SafeAreaView>
   );
 }

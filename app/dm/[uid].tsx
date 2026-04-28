@@ -88,6 +88,10 @@ export default function DMScreen() {
   // anonymous-match username hiding
   const [hideUsernameForOther, setHideUsernameForOther] = useState(false);
 
+  // 3-day match expiry
+  const [matchExpired, setMatchExpired] = useState(false);
+  const [matchExpiresAt, setMatchExpiresAt] = useState<Timestamp | null>(null);
+
   const getDisplayName = (u: string) => {
     if (u === uid) return 'You';
     if (u === otherUid && hideUsernameForOther) return 'Anonymous Match';
@@ -565,6 +569,33 @@ export default function DMScreen() {
     return () => { cancelled = true; };
   }, [uid, otherUid]);
 
+  // Subscribe to the match document to detect expiry in real time
+  useEffect(() => {
+    if (!uid || !otherUid) return;
+    const matchId = [uid, otherUid].sort().join('_');
+    const matchRef = doc(firestore, 'matches', matchId);
+    return onSnapshot(matchRef, (snap) => {
+      if (!snap.exists()) {
+        setMatchExpired(false);
+        setMatchExpiresAt(null);
+        return;
+      }
+      const data = snap.data();
+      const exp: Timestamp | null = data.expiresAt ?? null;
+      const expired = data.active === false || (exp !== null && exp.toMillis() <= Date.now());
+      setMatchExpired(expired);
+      setMatchExpiresAt(exp);
+      // Schedule a local flip if the match expires while the screen is open
+      if (!expired && exp) {
+        const msLeft = exp.toMillis() - Date.now();
+        if (msLeft > 0) {
+          const id = setTimeout(() => setMatchExpired(true), msLeft);
+          return () => clearTimeout(id);
+        }
+      }
+    });
+  }, [uid, otherUid]);
+
   return (
     <>
       {/* Reactions details modal */}
@@ -777,55 +808,67 @@ export default function DMScreen() {
             </View>
           )}
 
-          {/* Composer */}
-          <View style={[styles.inputRow, { paddingBottom: Math.max(6, insets.bottom ? insets.bottom * 0.25 : 6), paddingTop: 6 }]}>
-            <TouchableOpacity onPress={() => setPickerOpen((v) => !v)} style={styles.emojiToggle}>
-              <Text style={{ fontSize: 20 }}>😊</Text>
-            </TouchableOpacity>
-
-            <TextInput
-              value={text}
-              onChangeText={setText}
-              placeholder={replyingTo ? 'Reply…' : 'Message…'}
-              placeholderTextColor="#888"
-              style={styles.input}
-              multiline
-              blurOnSubmit={false}
-              returnKeyType="default"
-              textAlignVertical="center"
-              autoCapitalize="none"
-            />
-
-            <TouchableOpacity
-              onPress={send}
-              style={[styles.sendBtn, sendDisabled && { opacity: 0.5 }]}
-              disabled={sendDisabled}
-            >
-              <Text style={{ color: '#fff', fontWeight: '700' }}>
-                {sending ? 'Sending…' : 'Send'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {keyboardOpen && (
-            <Pressable
-              onPress={Keyboard.dismiss}
-              style={styles.keyboardDismissOverlay}
-              pointerEvents="auto"
-            />
-          )}
-
-          {/* Simple emoji row for composing */}
-          {pickerOpen && (
-            <View style={styles.emojiRow}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {COMPOSER_EMOJI.map((em) => (
-                  <TouchableOpacity key={em} onPress={() => setText((t) => t + em)} style={styles.emojiItem}>
-                    <Text style={{ fontSize: 22 }}>{em}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
+          {/* Expired match banner replaces composer */}
+          {matchExpired ? (
+            <View style={styles.expiredBanner}>
+              <Text style={styles.expiredTitle}>This match has ended</Text>
+              <Text style={styles.expiredSub}>The 3-day window is over. You can still read the conversation.</Text>
             </View>
+          ) : null}
+
+          {/* Composer — hidden when match has expired */}
+          {!matchExpired && (
+            <>
+              <View style={[styles.inputRow, { paddingBottom: Math.max(6, insets.bottom ? insets.bottom * 0.25 : 6), paddingTop: 6 }]}>
+                <TouchableOpacity onPress={() => setPickerOpen((v) => !v)} style={styles.emojiToggle}>
+                  <Text style={{ fontSize: 20 }}>😊</Text>
+                </TouchableOpacity>
+
+                <TextInput
+                  value={text}
+                  onChangeText={setText}
+                  placeholder={replyingTo ? 'Reply…' : 'Message…'}
+                  placeholderTextColor="#888"
+                  style={styles.input}
+                  multiline
+                  blurOnSubmit={false}
+                  returnKeyType="default"
+                  textAlignVertical="center"
+                  autoCapitalize="none"
+                />
+
+                <TouchableOpacity
+                  onPress={send}
+                  style={[styles.sendBtn, sendDisabled && { opacity: 0.5 }]}
+                  disabled={sendDisabled}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '700' }}>
+                    {sending ? 'Sending…' : 'Send'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {keyboardOpen && (
+                <Pressable
+                  onPress={Keyboard.dismiss}
+                  style={styles.keyboardDismissOverlay}
+                  pointerEvents="auto"
+                />
+              )}
+
+              {/* Simple emoji row for composing */}
+              {pickerOpen && (
+                <View style={styles.emojiRow}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {COMPOSER_EMOJI.map((em) => (
+                      <TouchableOpacity key={em} onPress={() => setText((t) => t + em)} style={styles.emojiItem}>
+                        <Text style={{ fontSize: 22 }}>{em}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </>
           )}
         </View>
       </KeyboardAvoidingView>
@@ -1072,4 +1115,15 @@ const styles = StyleSheet.create({
   actionText: { color: '#e5e7eb', fontWeight: '700' },
   actionDanger: { backgroundColor: '#2b1c1c' },
   actionDangerText: { color: '#fca5a5' },
+
+  expiredBanner: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    backgroundColor: '#111',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#333',
+  },
+  expiredTitle: { color: '#aaa', fontWeight: '700', fontSize: 15 },
+  expiredSub: { color: '#666', fontSize: 12, marginTop: 4, textAlign: 'center' },
 });

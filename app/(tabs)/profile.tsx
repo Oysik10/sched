@@ -31,7 +31,7 @@ export default function ProfileScreen() {
             <TouchableOpacity
               key={tab.label}
               style={styles.tabButton}
-              onPress={() => router.push(tab.route)}
+              onPress={() => router.push(tab.route as any)}
             >
               <Text style={styles.tabText}>{tab.label}</Text>
             </TouchableOpacity>
