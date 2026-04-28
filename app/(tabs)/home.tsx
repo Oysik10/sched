@@ -1,19 +1,26 @@
 // app/(tabs)/home.tsx
-import React from 'react';
-import { View, Text, TouchableOpacity, SafeAreaView, StyleSheet } from 'react-native';
+import React, { useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  SafeAreaView,
+  StyleSheet,
+  FlatList,
+  Dimensions,
+  ActivityIndicator,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firestore } from '../../src/firebaseConfig';
-import {
-  doc, getDoc, collection, query, orderBy, limit, onSnapshot
-} from 'firebase/firestore';
-
-
-import { useDailyQuestions } from '../../src/hooks/useDailyQuestions';
-import { todayKeyUTC } from '../../src/utils/day';
+import { doc, getDoc } from 'firebase/firestore';
 import { MatchTopSection } from '../../src/components/MatchTopSection';
+import { usePersistentMatch } from '../../src/hooks/usePersistentMatch';
 
-/* ---------------- Admin button (unchanged) ---------------- */
+const SCREEN_W = Dimensions.get('window').width;
+const CARD_W = SCREEN_W - 24; // 12px padding each side
+
+/* ---------------- Admin button ---------------- */
 function AdminButton() {
   const [isAdmin, setIsAdmin] = React.useState(false);
   const [checking, setChecking] = React.useState(true);
@@ -41,104 +48,203 @@ function AdminButton() {
   );
 }
 
-/* ---------------- Listen to latest pending match in user's inbox ---------------- */
-type InboxItem = {
-  matchId: string;
-  participants: string[];
-  createdAt?: any; // Firestore Timestamp
-  status?: 'pending_questionnaire' | 'active' | 'expired' | string;
-};
+/* ---------------- Q&A swiper ---------------- */
+type QAData = { questions: string[]; answers: string[] } | null;
 
-function useLatestPendingMatch() {
-  const [loading, setLoading] = React.useState(true);
-  const [pending, setPending] = React.useState<InboxItem | null>(null);
+function QASwiper({ data, label }: { data: QAData; label: string }) {
+  const [page, setPage] = useState(0);
+  const listRef = useRef<FlatList>(null);
+
+  const items = data?.questions?.length
+    ? data.questions.map((q, i) => ({ q, a: data.answers?.[i] ?? '—' }))
+    : null;
+
+  return (
+    <View style={styles.swiperSection}>
+      <View style={styles.swiperHeader}>
+        <Text style={styles.swiperLabel}>{label}</Text>
+        {items && (
+          <Text style={styles.swiperPage}>{page + 1} / {items.length}</Text>
+        )}
+      </View>
+
+      {!items ? (
+        <View style={styles.swiperEmpty}>
+          <Text style={styles.swiperEmptyText}>No answers yet</Text>
+        </View>
+      ) : (
+        <>
+          <FlatList
+            ref={listRef}
+            data={items}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            onMomentumScrollEnd={(e) => {
+              setPage(Math.round(e.nativeEvent.contentOffset.x / CARD_W));
+            }}
+            getItemLayout={(_, index) => ({
+              length: CARD_W,
+              offset: CARD_W * index,
+              index,
+            })}
+            renderItem={({ item, index }) => (
+              <View style={[styles.qaCard, { width: CARD_W }]}>
+                <Text style={styles.qaCardNum}>Q{index + 1}</Text>
+                <Text style={styles.qaQuestion}>{item.q}</Text>
+                <View style={styles.qaDivider} />
+                <Text style={styles.qaAnswer}>{item.a}</Text>
+              </View>
+            )}
+            keyExtractor={(_, i) => String(i)}
+          />
+          <View style={styles.dotsRow}>
+            {items.map((_, i) => (
+              <View key={i} style={[styles.dot, i === page && styles.dotActive]} />
+            ))}
+          </View>
+        </>
+      )}
+    </View>
+  );
+}
+
+/* ---------------- Match Q&A section ---------------- */
+function MatchQASection() {
+  const { hasMatch, partnerUid, isExpired, loading } = usePersistentMatch();
+  const [myQA, setMyQA] = useState<QAData>(null);
+  const [partnerQA, setPartnerQA] = useState<QAData>(null);
+  const [fetching, setFetching] = useState(false);
 
   React.useEffect(() => {
-    const u = auth.currentUser;
-    if (!u) { setPending(null); setLoading(false); return; }
+    const uid = auth.currentUser?.uid ?? '';
+    if (!hasMatch || isExpired || !uid) {
+      setMyQA(null);
+      setPartnerQA(null);
+      return;
+    }
 
-    const qy = query(
-      collection(firestore, 'users', u.uid, 'inbox'),
-      orderBy('createdAt', 'desc'),
-      limit(5) // grab a few in case top one is not pending
+    let cancelled = false;
+    setFetching(true);
+
+    (async () => {
+      try {
+        const fetches: Promise<any>[] = [getDoc(doc(firestore, 'users', uid))];
+        if (partnerUid) fetches.push(getDoc(doc(firestore, 'users', partnerUid)));
+
+        const [mySnap, partnerSnap] = await Promise.all(fetches);
+        if (cancelled) return;
+
+        setMyQA(mySnap.exists() ? (mySnap.data()?.matchQA ?? null) : null);
+        setPartnerQA(partnerSnap?.exists() ? (partnerSnap.data()?.matchQA ?? null) : null);
+      } catch {
+        // ignore fetch errors
+      } finally {
+        if (!cancelled) setFetching(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [hasMatch, isExpired, partnerUid]);
+
+  if (loading || !hasMatch || isExpired) return null;
+
+  if (fetching) {
+    return (
+      <View style={styles.fetchingRow}>
+        <ActivityIndicator size="small" color="#CFAF45" />
+      </View>
     );
+  }
 
-    const unsub = onSnapshot(qy, (snap) => {
-      const items = snap.docs.map(d => ({ matchId: d.id, ...(d.data() as any) })) as InboxItem[];
-      // find the newest pending questionnaire
-      const found = items.find(it => it?.status === 'pending_questionnaire') || null;
-      setPending(found);
-      setLoading(false);
-    }, () => setLoading(false));
-
-    return unsub;
-  }, []);
-
-  return { loading, pending };
+  return (
+    <View style={{ paddingHorizontal: 12, paddingTop: 4 }}>
+      <QASwiper data={myQA} label="Your answers" />
+      <QASwiper data={partnerQA} label="Match's answers" />
+    </View>
+  );
 }
 
 /* ---------------- Home screen ---------------- */
 export default function HomeScreen() {
-  const router = useRouter();
-  const { dayKey, questions } = useDailyQuestions(3);
-
-  const { loading, pending } = useLatestPendingMatch();
-
-  // derive partner uid from participants
-  const u = auth.currentUser;
-  const partnerUid = React.useMemo(() => {
-    if (!u || !pending?.participants?.length) return undefined;
-    return pending.participants.find(p => p !== u.uid);
-  }, [pending, u]);
-
-  // Auto-open questionnaire when a pending match exists and today's not completed
-  React.useEffect(() => {
-    const openIfNeeded = async () => {
-      const user = auth.currentUser;
-      if (!user || !pending?.matchId) return;
-
-      try {
-        const snap = await getDoc(doc(firestore, 'users', user.uid));
-        const dk = todayKeyUTC();
-        const completedOn = snap.exists() ? snap.data()?.dailyGuess?.completedOn : undefined;
-
-        if (completedOn !== dk) {
-          // Pass matchId/partner if your modal expects them
-          router.push({
-            pathname: '/(modals)/daily-guess',
-            params: { matchId: pending.matchId, partnerUid: partnerUid ?? '' }
-          } as any);
-        }
-      } catch {
-        // swallow fetch errors; avoid blocking the UI
-      }
-    };
-
-    if (pending?.status === 'pending_questionnaire') {
-      openIfNeeded();
-    }
-  }, [pending?.matchId, pending?.status, partnerUid, router]);
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
-      <View>
-        <AdminButton />
-      </View>
-      <MatchTopSection />
+      <FlatList
+        data={[]}
+        renderItem={null}
+        ListHeaderComponent={
+          <>
+            <AdminButton />
+            <MatchTopSection />
+            <MatchQASection />
+          </>
+        }
+        keyboardShouldPersistTaps="handled"
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  placeholder: {
-    marginHorizontal: 12,
-    marginTop: 12,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#ddd',
-    backgroundColor: '#fafafa',
+  fetchingRow: {
+    paddingVertical: 24,
     alignItems: 'center',
   },
-  placeholderText: { color: '#777' },
+
+  swiperSection: { marginBottom: 16 },
+  swiperHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  swiperLabel: { color: '#888', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  swiperPage: { color: '#555', fontSize: 12 },
+
+  swiperEmpty: {
+    backgroundColor: '#111',
+    borderRadius: 12,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#1e1e1e',
+  },
+  swiperEmptyText: { color: '#444', fontSize: 14 },
+
+  qaCard: {
+    backgroundColor: '#111',
+    borderRadius: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#1e1e1e',
+  },
+  qaCardNum: {
+    color: '#CFAF45',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  qaQuestion: {
+    color: '#aaa',
+    fontSize: 13,
+    lineHeight: 19,
+    marginBottom: 12,
+  },
+  qaDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: '#2a2a2a',
+    marginBottom: 12,
+  },
+  qaAnswer: {
+    color: '#fff',
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '500',
+  },
+
+  dotsRow: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 10 },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#2a2a2a' },
+  dotActive: { backgroundColor: '#CFAF45' },
 });

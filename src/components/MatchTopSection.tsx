@@ -30,7 +30,7 @@ function formatExpiry(ts: Timestamp): string {
 export function MatchTopSection() {
   const {
     loading, inQueue, hasMatch, partnerUid, expiresAt, isExpired,
-    joinQueue, leaveQueue, cancelMatch,
+    leaveQueue, cancelMatch,
   } = usePersistentMatch();
   const [uid, setUid] = useState('');
   const [busy, setBusy] = useState(false);
@@ -40,20 +40,8 @@ export function MatchTopSection() {
     return unsub;
   }, []);
 
-  const handleJoin = async () => {
-    setBusy(true);
-    try {
-      const result = await joinQueue();
-      if (result.status === 'matched') {
-        Alert.alert("You're matched!", 'Your 3-day anonymous chat has started. Tap Open to chat.');
-      } else if (result.status === 'queued') {
-        Alert.alert('In queue', "We're looking for your match — you'll be notified when paired.");
-      }
-    } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to join queue.');
-    } finally {
-      setBusy(false);
-    }
+  const handleJoin = () => {
+    router.push('/match/pre-queue-questions' as any);
   };
 
   const handleLeaveQueue = () => {
