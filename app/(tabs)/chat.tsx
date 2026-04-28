@@ -1,5 +1,5 @@
 // app/(tabs)/chat.tsx
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -7,12 +7,9 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  TextInput,
   Alert,
   Platform,
   ActionSheetIOS,
-  Keyboard,
-  Pressable,
 } from 'react-native';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
@@ -28,10 +25,10 @@ import {
   deleteDoc,
   writeBatch,
   limit as fsLimit,
-  setDoc, // ✅ keep a single import here
+  setDoc,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { router, useFocusEffect } from 'expo-router';
+import { router } from 'expo-router';
 
 type Thread = {
   id: string;
@@ -51,16 +48,8 @@ type Thread = {
   lastMessageAtMs?: number;
 };
 
-type UserHit = {
-  id: string;
-  username?: string;
-  firstName?: string;
-  lastName?: string;
-};
+// ---------- Anonymous Match Top Section helpers ----------
 
-// ---- Anonymous Match Top Section (golden tile → go to DM) ----
-
-// replace their todayKey() with:
 function todayKeyUTC() {
   const d = new Date();
   const yyyy = d.getUTCFullYear();
@@ -68,7 +57,6 @@ function todayKeyUTC() {
   const dd = String(d.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
 }
-
 
 function msLeft(expiresAt: any) {
   if (!expiresAt || typeof expiresAt.toMillis !== 'function') return 0;
@@ -79,7 +67,7 @@ function threadIdFor(a: string, b: string) {
   return [a, b].sort().join('_');
 }
 
-// ✅ Helper: check if both users finished today's questions
+// Check if both users finished today's questions
 async function bothCompletedToday(uidA: string, uidB: string) {
   const aRef = doc(firestore, 'users', uidA);
   const bRef = doc(firestore, 'users', uidB);
@@ -88,7 +76,6 @@ async function bothCompletedToday(uidA: string, uidB: string) {
   const bDone = bSnap.exists() && (bSnap.data()?.ephemeralQA?.completedOn === todayKeyUTC());
   return [aDone, bDone] as const;
 }
-
 
 function EphemeralMatchTopSection({ uid }: { uid: string }) {
   const [loading, setLoading] = useState(true);
@@ -148,46 +135,48 @@ function EphemeralMatchTopSection({ uid }: { uid: string }) {
     };
   }, [uid]);
 
-// ⛔ Gate the golden tile so it won't open DM unless both are done
-const onPressTile = async () => {
-  if (!uid) return;
+  // Gate the golden tile so it won't open DM unless both are done
+  const onPressTile = async () => {
+    if (!uid) return;
 
-  // No active match → go start/continue questions
-  if (!hasActiveMatch || !partnerUid) {
-    router.push('/match/questions');
-    return;
-  }
-
-  // Active match → allow only if both finished today
-  try {
-    const [meDone, partnerDone] = await bothCompletedToday(uid, partnerUid);
-    if (!meDone) {
-      Alert.alert(
-        "Answer today’s quick questions",
-        "You need to finish today’s questions to access the anonymous chat.",
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Answer now", onPress: () => router.push('/match/questions') }
-        ]
-      );
-      return;
-    }
-    if (!partnerDone) {
-      Alert.alert("Almost there", "Your partner hasn’t finished today’s questions yet. The chat will appear once they’re done.");
+    // No active match → go start/continue questions
+    if (!hasActiveMatch || !partnerUid) {
+      router.push('/match/questions');
       return;
     }
 
-    // Both done → ensure thread exists then go to DM
+    // Active match → allow only if both finished today
     try {
-      const tid = threadIdFor(uid, partnerUid);
-      await setDoc(doc(firestore, 'dms', tid), { participants: [uid, partnerUid].sort() }, { merge: true });
-    } catch {}
-    router.push(`/dm/${partnerUid}`);
-  } catch {
-    Alert.alert("Error", "Could not verify question status. Please try again.");
-  }
-};
+      const [meDone, partnerDone] = await bothCompletedToday(uid, partnerUid);
+      if (!meDone) {
+        Alert.alert(
+          "Answer today’s quick questions",
+          "You need to finish today’s questions to access the anonymous chat.",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Answer now", onPress: () => router.push('/match/questions') }
+          ]
+        );
+        return;
+      }
+      if (!partnerDone) {
+        Alert.alert(
+          "Almost there",
+          "Your partner hasn’t finished today’s questions yet. The chat will appear once they’re done."
+        );
+        return;
+      }
 
+      // Both done → ensure thread exists then go to DM
+      try {
+        const tid = threadIdFor(uid, partnerUid);
+        await setDoc(doc(firestore, 'dms', tid), { participants: [uid, partnerUid].sort() }, { merge: true });
+      } catch {}
+      router.push(`/dm/${partnerUid}`);
+    } catch {
+      Alert.alert("Error", "Could not verify question status. Please try again.");
+    }
+  };
 
   return (
     <View style={{ paddingHorizontal: 12, paddingTop: 12 }}>
@@ -236,6 +225,8 @@ const onPressTile = async () => {
   );
 }
 
+// ---------- Main Chat Screen (ONLY anonymous matches) ----------
+
 export default function ChatScreen() {
   const [uid, setUid] = useState<string>('');
 
@@ -246,56 +237,8 @@ export default function ChatScreen() {
     Record<string, { username?: string; firstName?: string; lastName?: string }>
   >({});
 
-  const [search, setSearch] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<UserHit[]>([]);
-  const [friendIds, setFriendIds] = useState<Set<string>>(new Set());
-  const [matchedPartnerIds, setMatchedPartnerIds] = useState<Set<string>>(new Set()); // ✅ stays here
-
-  // Ref for the search input so we can blur it on screen focus
-  const searchRef = useRef<TextInput>(null);
-
-  // Always start with the search bar blurred when this screen becomes active
-  useFocusEffect(
-    useCallback(() => {
-      const id = setTimeout(() => searchRef.current?.blur(), 0);
-      return () => clearTimeout(id);
-    }, [])
-  );
-
-  // Followers/following to compute mutuals
-  useEffect(() => {
-    if (!uid) return;
-
-    const followersRef = collection(firestore, 'users', uid, 'followers');
-    const followingRef = collection(firestore, 'users', uid, 'following');
-
-    let followers = new Set<string>();
-    let following = new Set<string>();
-
-    const recompute = () => {
-      const mutuals = new Set<string>();
-      followers.forEach((id) => {
-        if (following.has(id)) mutuals.add(id);
-      });
-      setFriendIds(mutuals);
-    };
-
-    const unsubFollowers = onSnapshot(followersRef, (snap) => {
-      followers = new Set(snap.docs.map((d) => d.id));
-      recompute();
-    });
-
-    const unsubFollowing = onSnapshot(followingRef, (snap) => {
-      following = new Set(snap.docs.map((d) => d.id));
-      recompute();
-    });
-
-    return () => {
-      unsubFollowers();
-      unsubFollowing();
-    };
-  }, [uid]);
+  // All userIds you've ever been matched with (active or past)
+  const [matchedPartnerIds, setMatchedPartnerIds] = useState<Set<string>>(new Set());
 
   // Auth subscribe
   useEffect(() => {
@@ -331,7 +274,7 @@ export default function ChatScreen() {
     return unsub;
   }, [uid]);
 
-  // Fetch profiles for “other” participant(s)
+  // Fetch profiles for “other” participant(s) (still needed for display fallback)
   useEffect(() => {
     if (!uid || threads.length === 0) return;
     const needed = new Set<string>();
@@ -364,7 +307,7 @@ export default function ChatScreen() {
     };
   }, [threads, uid, profiles]);
 
-  // ✅ TOP-LEVEL: collect every partner ever matched with me (active or past)
+  // Collect every partner ever matched with me (via matches collection)
   useEffect(() => {
     if (!uid) {
       setMatchedPartnerIds(new Set());
@@ -396,52 +339,15 @@ export default function ChatScreen() {
 
   const displayName = (pid: string) => {
     if (pid === uid) return 'You';
-    // Inbox-only rule: if this is a matched partner, show Anonymous Match
+    // ✅ If this is a matched partner, show Anonymous Match label only
     if (matchedPartnerIds.has(pid)) return 'Anonymous Match';
 
+    // Fallback (should not be used if you only render matched threads)
     const p = profiles[pid] || {};
     if (p.username) return `@${p.username}`;
     const name = [p.firstName, p.lastName].filter(Boolean).join(' ');
     return name || 'Unknown';
   };
-
-  // Username search (debounced; ALWAYS exclude self and non-mutuals)
-  useEffect(() => {
-    const term = search.trim().replace(/^@/, '').toLowerCase();
-    if (!term) {
-      setResults([]);
-      setSearching(false);
-      return;
-    }
-
-    let cancelled = false;
-    setSearching(true);
-    const t = setTimeout(async () => {
-      try {
-        const usersRef = collection(firestore, 'users');
-        const qy = query(
-          usersRef,
-          where('username', '>=', term),
-          where('username', '<=', term + '\uf8ff')
-        );
-        const snap = await getDocs(qy);
-        const hits: UserHit[] = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as any) }))
-          .filter((u) => u.id !== uid)
-          .filter((u) => friendIds.has(u.id));
-        if (!cancelled) setResults(hits);
-      } catch (e) {
-        if (!cancelled) setResults([]);
-      } finally {
-        if (!cancelled) setSearching(false);
-      }
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [search, uid, friendIds]);
 
   const formatTimestamp = (ms?: number) => {
     if (!ms) return '';
@@ -542,33 +448,33 @@ export default function ChatScreen() {
     const unread = item.lastSenderId !== uid && lastMsgMs > lastSeenMine;
 
     const handleOpenThread = async () => {
-      const otherId = (item.participants || []).find((p) => p !== uid) || '';
       if (!otherId) return;
 
-      // If this is an Anonymous Match thread, block unless both finished today
-      if (matchedPartnerIds.has(otherId)) {
-        try {
-          const [meDone, partnerDone] = await bothCompletedToday(uid, otherId);
-          if (!meDone) {
-            Alert.alert(
-              "Answer today’s quick questions",
-              "You need to finish today’s questions to access the anonymous chat.",
-              [
-                { text: "Cancel", style: "cancel" },
-                { text: "Answer now", onPress: () => router.push('/match/questions') }
-              ]
-            );
-            return;
-          }
-          if (!partnerDone) {
-            Alert.alert("Almost there", "Your partner hasn’t finished today’s questions yet. The chat will unlock once they’re done.");
-            return;
-          }
-          // else: both done → continue to open the thread
-        } catch {
-          Alert.alert("Error", "Could not verify question status. Please try again.");
+      // ✅ This thread is already guaranteed to be a matched partner (see visibleThreads),
+      // but we still gate by daily questions:
+      try {
+        const [meDone, partnerDone] = await bothCompletedToday(uid, otherId);
+        if (!meDone) {
+          Alert.alert(
+            "Answer today’s quick questions",
+            "You need to finish today’s questions to access the anonymous chat.",
+            [
+              { text: "Cancel", style: "cancel" },
+              { text: "Answer now", onPress: () => router.push('/match/questions') }
+            ]
+          );
           return;
         }
+        if (!partnerDone) {
+          Alert.alert(
+            "Almost there",
+            "Your partner hasn’t finished today’s questions yet. The chat will unlock once they’re done."
+          );
+          return;
+        }
+      } catch {
+        Alert.alert("Error", "Could not verify question status. Please try again.");
+        return;
       }
 
       const now = Date.now();
@@ -593,14 +499,12 @@ export default function ChatScreen() {
       router.push(`/dm/${otherId}`);
     };
 
-
     return (
       <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={handleOpenThread}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>
-            {matchedPartnerIds.has(otherId)
-              ? 'A'
-              : displayName(otherId).replace(/^@/, '').slice(0, 1).toUpperCase()}
+            {/* Always show 'A' for Anonymous Match */}
+            {'A'}
           </Text>
         </View>
 
@@ -608,7 +512,7 @@ export default function ChatScreen() {
           <View style={styles.topLine}>
             <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, minWidth: 0 }}>
               <Text style={[styles.name, unread && styles.nameUnread]} numberOfLines={1}>
-                {displayName(otherId)}
+                Anonymous Match
               </Text>
               {unread && <View style={styles.unreadDot} />}
             </View>
@@ -633,37 +537,6 @@ export default function ChatScreen() {
     );
   };
 
-  const renderUser = ({ item }: { item: UserHit }) => (
-    <TouchableOpacity
-      style={styles.row}
-      activeOpacity={0.7}
-      onPress={() => {
-        Keyboard.dismiss();
-        router.push(`/dm/${item.id}`);
-      }}
-    >
-      <View style={styles.avatar}>
-        <Text style={styles.avatarText}>
-          {(item.username?.[0] || item.firstName?.[0] || '?').toUpperCase()}
-        </Text>
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <View style={styles.topLine}>
-          <Text style={styles.name} numberOfLines={1}>
-            {item.username ? `@${item.username}` : 'Unknown'}
-          </Text>
-          <Text style={styles.time} />
-        </View>
-        <View style={styles.bottomLine}>
-          <Text style={styles.lastText} numberOfLines={1}>
-            {[item.firstName, item.lastName].filter(Boolean).join(' ') || '—'}
-          </Text>
-          <Text style={styles.time} />
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
-
   if (!uid || loading) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -672,77 +545,34 @@ export default function ChatScreen() {
     );
   }
 
-  const showSearchResults = search.trim().length > 0;
+  // ✅ Only show threads whose "other participant" is a matched partner
+  const visibleThreads = threads.filter((t) => {
+    const other = (t.participants || []).find((p) => p !== uid);
+    return !!other && matchedPartnerIds.has(other);
+  });
 
   return (
-    <Pressable style={styles.container} onPress={Keyboard.dismiss}>
-      {/* Anonymous match lives at the very top (golden) */}
+    <View style={styles.container}>
+      {/* Anonymous match tile at top */}
       <EphemeralMatchTopSection uid={uid} />
 
-      {/* Search bar with @ prefix */}
-      <View style={styles.searchRow}>
-        <Text style={styles.atSymbol}>@</Text>
-        <TextInput
-          ref={searchRef}
-          style={[styles.searchInput, { paddingRight: 24 }]}
-          placeholder="Search username"
-          placeholderTextColor="#888"
-          value={search}
-          onChangeText={(v) => setSearch(v.replace(/\s/g, '').toLowerCase())}
-          autoCapitalize="none"
-          autoCorrect={false}
-          returnKeyType="search"
-          blurOnSubmit
-          onSubmitEditing={Keyboard.dismiss}
-        />
-        {search.length > 0 && (
-          <TouchableOpacity
-            onPress={() => {
-              setSearch('');
-              router.replace('/chat');
-            }}
-            style={{ position: 'absolute', right: 12, padding: 4 }}
-          >
-            <Text style={{ color: '#888', fontSize: 16 }}>×</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+      {/* No search bar, no username search, no friend DMing */}
 
-      {/* Results / Threads */}
-      {showSearchResults ? (
-        searching ? (
-          <View style={styles.center}>
-            <ActivityIndicator />
-          </View>
-        ) : results.length === 0 ? (
-          <View style={styles.center}>
-            <Text style={{ color: '#888' }}>No users found.</Text>
-          </View>
-        ) : (
-          <FlatList
-            data={results}
-            keyExtractor={(i) => i.id}
-            renderItem={renderUser}
-            contentContainerStyle={{ paddingHorizontal: 12 }}
-            keyboardDismissMode="on-drag"
-            keyboardShouldPersistTaps="handled"
-          />
-        )
-      ) : threads.length === 0 ? (
+      {visibleThreads.length === 0 ? (
         <View style={styles.center}>
-          <Text style={{ color: '#888' }}>No messages yet.</Text>
+          <Text style={{ color: '#888' }}>No anonymous chats yet.</Text>
         </View>
       ) : (
         <FlatList
-          data={threads}
+          data={visibleThreads}
           keyExtractor={(t) => t.id}
           renderItem={renderThread}
-          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8 }}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 8, paddingTop: 12 }}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
         />
       )}
-    </Pressable>
+    </View>
   );
 }
 
@@ -750,22 +580,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  // search
-  searchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#111',
-    borderRadius: 10,
-    borderColor: '#222',
-    borderWidth: 1,
-    margin: 12,
-    height: 44,
-    paddingHorizontal: 12,
-  },
-  atSymbol: { color: '#888', fontSize: 16, marginRight: 6 },
-  searchInput: { flex: 1, color: '#fff', fontSize: 16 },
-
-  // list rows
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -787,12 +601,10 @@ const styles = StyleSheet.create({
   },
   avatarText: { color: '#e5e7eb', fontWeight: '700', fontSize: 14 },
 
-  // text
   name: { color: '#fff', fontSize: 16, fontWeight: '700' },
   lastText: { color: '#bbb', marginTop: 2, flexShrink: 1 },
   time: { color: '#7c7c7c', marginTop: 2, marginLeft: 10, fontSize: 12 },
 
-  // layout lines
   topLine: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -805,7 +617,6 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
 
-  // unread styling
   unreadDot: {
     width: 8,
     height: 8,
@@ -821,7 +632,6 @@ const styles = StyleSheet.create({
     color: '#dbeafe',
   },
 
-  // options button
   more: {
     color: '#aaa',
     fontSize: 18,

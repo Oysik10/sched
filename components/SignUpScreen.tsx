@@ -77,7 +77,7 @@ export default function SignUpScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <Text style={styles.title}>Create Your PlanPal Account</Text>
+        <Text style={styles.title}>Create Your Account</Text>
 
         {[
           { label: 'First Name', key: 'firstName' },

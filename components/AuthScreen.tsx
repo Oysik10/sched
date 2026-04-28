@@ -143,7 +143,7 @@ const AuthScreen = () => {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
-        <Text style={styles.title}>PlanPal</Text>
+        <Text style={styles.title}></Text>
 
         <Text style={styles.label}>Email</Text>
         <TextInput
