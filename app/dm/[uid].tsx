@@ -12,7 +12,7 @@ import { auth, firestore } from '../../src/firebaseConfig';
 import {
   addDoc, collection, doc, getDoc, onSnapshot,
   orderBy, query, serverTimestamp, setDoc, updateDoc, deleteField,
-  limit, getDocs, deleteDoc, Timestamp, startAfter, where
+  limit, getDocs, deleteDoc, Timestamp, startAfter, where, writeBatch,
 } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -149,7 +149,37 @@ export default function DMScreen() {
     })();
   }, [threadId, uid, otherUid]);
 
-  // Stream messages (DESC: newest first)
+  const MSG_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+  // Delete messages older than 24 h in background whenever the thread opens
+  useEffect(() => {
+    if (!threadId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const cutoff = Timestamp.fromMillis(Date.now() - MSG_TTL_MS);
+        const oldQ = query(
+          collection(firestore, 'dms', threadId, 'items'),
+          where('createdAt', '<', cutoff),
+          limit(500)
+        );
+        // loop until no more old messages remain
+        while (!cancelled) {
+          const snap = await getDocs(oldQ);
+          if (snap.empty) break;
+          const batch = writeBatch(firestore);
+          snap.forEach((d) => batch.delete(d.ref));
+          await batch.commit();
+          if (snap.size < 500) break;
+        }
+      } catch {
+        // non-fatal: cleanup runs best-effort
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [threadId]);
+
+  // Stream messages (DESC: newest first) — filter to last 24 h on client as well
   useEffect(() => {
     if (!threadId) return;
     const qy = query(
@@ -160,7 +190,10 @@ export default function DMScreen() {
     const unsub = onSnapshot(
       qy,
       (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) })) as Msg[];
+        const cutoffMs = Date.now() - MSG_TTL_MS;
+        const list = snap.docs
+          .map((d) => ({ id: d.id, ...(d.data() as any) }))
+          .filter((m) => getMs(m as Msg) > cutoffMs) as Msg[];
         setMessages(list); // newest is at index 0
         const last = list[list.length - 1]; // this is the OLDEST of this page
         setOldestCursor(last ? getMs(last) : null);

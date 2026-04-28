@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { firestore, auth } from '../../src/firebaseConfig';
 import { deleteDmBetween } from '../../src/dmUtils';
+import { router } from 'expo-router';
 
 export default function SearchUsersScreen() {
   const [search, setSearch] = useState('');
@@ -204,37 +205,32 @@ export default function SearchUsersScreen() {
             const isFriends = isFollowing && isFollower;
 
             return (
-              <TouchableOpacity activeOpacity={1} onPress={Keyboard.dismiss}>
-                <View style={styles.userItem}>
-                  <View style={styles.topRow}>
-                    <View>
-                      <Text style={styles.username}>@{item.username}</Text>
-                      <Text style={styles.details}>{item.firstName} {item.lastName}</Text>
-                    </View>
-                    {isFriends && (
-                      <View style={styles.friendsBadge}>
-                        <Text style={styles.friendsBadgeText}>Friends ✓</Text>
-                      </View>
-                    )}
+              <TouchableOpacity
+                style={styles.userItem}
+                activeOpacity={0.75}
+                onPress={() => {
+                  Keyboard.dismiss();
+                  router.push(`/user/${item.id}` as any);
+                }}
+              >
+                <View style={styles.topRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.username}>@{item.username}</Text>
+                    <Text style={styles.details}>{item.firstName} {item.lastName}</Text>
                   </View>
-
-                  <TouchableOpacity
-                    onPress={() => {
-                      Keyboard.dismiss();
-                      if (isFriends) return handleUnfriend(item.id);
-                      if (isFollowing) return handleUnfollow(item.id);
-                      return handleAddFriend(item.id);
-                    }}
-                    style={[
-                      styles.addButton,
-                      isFriends && { backgroundColor: '#3cab5b' },
-                      !isFriends && isFollowing && { backgroundColor: '#444' },
-                    ]}
-                  >
-                    <Text style={styles.addButtonText}>
-                      {isFriends ? 'Unfriend' : isFollowing ? 'Sent' : 'Send Friend Request'}
-                    </Text>
-                  </TouchableOpacity>
+                  {isFriends ? (
+                    <View style={styles.friendsBadge}>
+                      <Text style={styles.friendsBadgeText}>Friends ✓</Text>
+                    </View>
+                  ) : isFollowing ? (
+                    <View style={styles.sentBadge}>
+                      <Text style={styles.sentBadgeText}>Sent</Text>
+                    </View>
+                  ) : isFollower ? (
+                    <View style={styles.pendingBadge}>
+                      <Text style={styles.pendingBadgeText}>Wants to friend you</Text>
+                    </View>
+                  ) : null}
                 </View>
               </TouchableOpacity>
             );
@@ -299,11 +295,22 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   friendsBadgeText: { color: '#3cab5b', fontSize: 12, fontWeight: '700' },
-  addButton: {
-    backgroundColor: '#1e3a8a',
-    paddingVertical: 8,
-    borderRadius: 6,
-    alignItems: 'center',
+  sentBadge: {
+    backgroundColor: '#1a1a2e',
+    borderColor: '#3b3b7a',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
   },
-  addButtonText: { color: '#fff', fontSize: 14, fontWeight: '500' },
+  sentBadgeText: { color: '#93c5fd', fontSize: 12, fontWeight: '600' },
+  pendingBadge: {
+    backgroundColor: '#1a2030',
+    borderColor: '#3b5a8a',
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  pendingBadgeText: { color: '#60a5fa', fontSize: 12, fontWeight: '600' },
 });
