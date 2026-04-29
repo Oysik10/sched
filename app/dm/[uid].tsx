@@ -17,6 +17,8 @@ import {
 import { onAuthStateChanged } from 'firebase/auth';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Keyboard, Pressable } from 'react-native';
+import { checkMessage } from '../../src/utils/moderation';
+import { translateText, COMMON_LANGS } from '../../src/utils/translate';
 
 type Msg = {
   id: string;
@@ -60,6 +62,13 @@ function formatTimestamp(ms: number, { withSeconds = false, includeDate = true }
   return d.toLocaleString(undefined, opts);
 }
 
+function BlurOverlay({ style, children }: { style: any; children: React.ReactNode }) {
+  if (Platform.OS === 'ios') {
+    return <BlurView intensity={30} tint="dark" style={style}>{children}</BlurView>;
+  }
+  return <View style={[style, { backgroundColor: 'rgba(0,0,0,0.88)' }]}>{children}</View>;
+}
+
 export default function DMScreen() {
   const rawParam = useLocalSearchParams().uid as string | string[] | undefined;
   const otherUid = Array.isArray(rawParam) ? rawParam[0] : (rawParam ?? '');
@@ -74,6 +83,9 @@ export default function DMScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedForReaction, setSelectedForReaction] = useState<Msg | null>(null);
   const [replyingTo, setReplyingTo] = useState<Msg | null>(null);
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [langPickerFor, setLangPickerFor] = useState<Msg | null>(null);
+  const [translating, setTranslating] = useState(false);
 
   const flatRef = useRef<FlatList>(null);
   const initialScrolledRef = useRef(false);
@@ -479,6 +491,16 @@ export default function DMScreen() {
 
     try {
       setSending(true);
+
+      const mod = await checkMessage(trimmed);
+      if (mod.blocked) {
+        Alert.alert(
+          'Message blocked',
+          `Your message was flagged for ${mod.reason}. Please revise it before sending.`
+        );
+        return;
+      }
+
       const now = Date.now();
 
       const payload: any = {
@@ -672,7 +694,7 @@ export default function DMScreen() {
         animationType="fade"
         onRequestClose={() => setSelectedForReaction(null)}
       >
-        <BlurView intensity={30} tint="dark" style={styles.reactionOverlay}>
+        <BlurOverlay style={styles.reactionOverlay}>
           <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
 
           {selectedForReaction && (
@@ -705,6 +727,13 @@ export default function DMScreen() {
                   <Text style={styles.actionText}>Reply</Text>
                 </TouchableOpacity>
 
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={() => { setLangPickerFor(selectedForReaction); setSelectedForReaction(null); }}
+                >
+                  <Text style={styles.actionText}>Translate</Text>
+                </TouchableOpacity>
+
                 {selectedForReaction.senderId !== uid && (
                   <TouchableOpacity
                     style={[styles.actionBtn, { backgroundColor: '#3a243a' }]}
@@ -734,7 +763,48 @@ export default function DMScreen() {
           )}
 
           <TouchableOpacity style={styles.overlayTouchable} activeOpacity={1} onPress={() => setSelectedForReaction(null)} />
-        </BlurView>
+        </BlurOverlay>
+      </Modal>
+
+      {/* Language picker modal for translation */}
+      <Modal
+        visible={!!langPickerFor}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLangPickerFor(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Translate to…</Text>
+            <ScrollView style={{ maxHeight: 340 }} showsVerticalScrollIndicator={false}>
+              {COMMON_LANGS.map((lang) => (
+                <TouchableOpacity
+                  key={lang.code}
+                  style={styles.langRow}
+                  disabled={translating}
+                  onPress={async () => {
+                    const msg = langPickerFor!;
+                    setLangPickerFor(null);
+                    setTranslating(true);
+                    try {
+                      const translated = await translateText(msg.text, lang.code);
+                      setTranslations((prev) => ({ ...prev, [msg.id]: translated }));
+                    } catch {
+                      Alert.alert('Translation failed', 'Could not translate. Try again.');
+                    } finally {
+                      setTranslating(false);
+                    }
+                  }}
+                >
+                  <Text style={styles.langText}>{lang.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity onPress={() => setLangPickerFor(null)} style={styles.modalClose}>
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
 
       <KeyboardAvoidingView
@@ -813,9 +883,17 @@ export default function DMScreen() {
                         This message was reported.
                       </Text>
                     ) : (
-                      <Text style={mine ? styles.myText : styles.theirText}>
-                        {item.text}
-                      </Text>
+                      <>
+                        <Text style={mine ? styles.myText : styles.theirText}>
+                          {item.text}
+                        </Text>
+                        {translations[item.id] ? (
+                          <View style={styles.translationBox}>
+                            <Text style={styles.translationLabel}>· translated</Text>
+                            <Text style={styles.translationText}>{translations[item.id]}</Text>
+                          </View>
+                        ) : null}
+                      </>
                     )}
                   </TouchableOpacity>
 
@@ -1159,4 +1237,21 @@ const styles = StyleSheet.create({
   },
   expiredTitle: { color: '#aaa', fontWeight: '700', fontSize: 15 },
   expiredSub: { color: '#666', fontSize: 12, marginTop: 4, textAlign: 'center' },
+
+  langRow: {
+    paddingVertical: 13,
+    paddingHorizontal: 8,
+    borderBottomColor: '#1f1f1f',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  langText: { color: '#ddd', fontSize: 15 },
+
+  translationBox: {
+    marginTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.15)',
+    paddingTop: 5,
+  },
+  translationLabel: { color: '#888', fontSize: 11, marginBottom: 2, fontStyle: 'italic' },
+  translationText: { color: '#c8d8f0', fontSize: 15 },
 });
