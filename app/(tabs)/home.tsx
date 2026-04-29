@@ -25,8 +25,59 @@ import {
   limit,
   Timestamp,
 } from 'firebase/firestore';
+import { Ionicons } from '@expo/vector-icons';
 import { MatchTopSection } from '../../src/components/MatchTopSection';
 import { usePersistentMatch } from '../../src/hooks/usePersistentMatch';
+
+/* ---------------- Bell icon with unread badge ---------------- */
+function BellButton({ uid }: { uid: string }) {
+  const [unread, setUnread] = useState(0);
+
+  useEffect(() => {
+    if (!uid) return;
+    const q = query(
+      collection(firestore, 'users', uid, 'notifications'),
+      where('read', '==', false)
+    );
+    return onSnapshot(q, (snap) => setUnread(snap.size), () => setUnread(0));
+  }, [uid]);
+
+  return (
+    <TouchableOpacity
+      onPress={() => router.push('/notifications' as any)}
+      style={bellStyles.btn}
+      hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+    >
+      <Ionicons
+        name={unread > 0 ? 'notifications' : 'notifications-outline'}
+        size={24}
+        color={unread > 0 ? '#CFAF45' : '#888'}
+      />
+      {unread > 0 && (
+        <View style={bellStyles.badge}>
+          <Text style={bellStyles.badgeText}>{unread > 99 ? '99+' : unread}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const bellStyles = StyleSheet.create({
+  btn: { position: 'relative', padding: 4 },
+  badge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+});
 
 const SCREEN_W = Dimensions.get('window').width;
 const CARD_W = SCREEN_W - 24;
@@ -398,8 +449,20 @@ function PostMatchSection() {
 
 /* ---------------- Home screen ---------------- */
 export default function HomeScreen() {
+  const [uid, setUid] = useState('');
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? ''));
+    return unsub;
+  }, []);
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#000' }}>
+      {/* Top header bar with bell */}
+      <View style={styles.topBar}>
+        <Text style={styles.topBarTitle}>Home</Text>
+        <BellButton uid={uid} />
+      </View>
+
       <FlatList
         data={[]}
         renderItem={null}
@@ -419,6 +482,17 @@ export default function HomeScreen() {
 
 /* ---------------- Styles ---------------- */
 const styles = StyleSheet.create({
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#1e1e1e',
+  },
+  topBarTitle: { color: '#fff', fontSize: 18, fontWeight: '800' },
+
   fetchingRow: { paddingVertical: 24, alignItems: 'center' },
 
   // Active-match Q&A swiper

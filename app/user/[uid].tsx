@@ -19,6 +19,7 @@ import {
   deleteDoc,
   onSnapshot,
 } from 'firebase/firestore';
+import { createNotification } from '../../src/utils/createNotification';
 
 type Profile = {
   username?: string;
@@ -97,6 +98,13 @@ export default function UserProfileScreen() {
         setDoc(doc(firestore, 'users', myUid, 'following', theirUid), { followedUid: theirUid, createdAt: now }),
         setDoc(doc(firestore, 'users', theirUid, 'followers', myUid), { followerUid: myUid, createdAt: now }),
       ]);
+      // Notify recipient
+      await createNotification(theirUid, {
+        type: 'friend_request',
+        title: 'New friend request',
+        body: `Someone sent you a friend request.`,
+        fromUid: myUid,
+      });
     } catch {
       Alert.alert('Error', 'Could not send friend request.');
     } finally {
@@ -129,6 +137,13 @@ export default function UserProfileScreen() {
         setDoc(doc(firestore, 'users', myUid, 'following', theirUid), { followedUid: theirUid, createdAt: now }),
         setDoc(doc(firestore, 'users', theirUid, 'followers', myUid), { followerUid: myUid, createdAt: now }),
       ]);
+      // Notify original sender that their request was accepted
+      await createNotification(theirUid, {
+        type: 'friend_accepted',
+        title: 'Friend request accepted',
+        body: 'Your friend request was accepted.',
+        fromUid: myUid,
+      });
     } catch {
       Alert.alert('Error', 'Could not accept request.');
     } finally {

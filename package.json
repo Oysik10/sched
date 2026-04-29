@@ -53,7 +53,9 @@
     "react-native-tab-view": "^4.1.2",
     "react-native-web": "~0.20.0",
     "react-native-webview": "13.13.5",
-    "tslib": "^2.8.1"
+    "tslib": "^2.8.1",
+    "expo-notifications": "~0.31.5",
+    "expo-device": "~7.1.4"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
