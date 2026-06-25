@@ -47,6 +47,12 @@ export function MatchTopSection() {
   };
 
   const handleCancelSearch = () => {
+    if (Platform.OS === 'web') {
+      if (!window.confirm('Stop searching? You will leave the matchmaking queue.')) return;
+      setBusy(true);
+      cancelPending().catch(() => {}).finally(() => setBusy(false));
+      return;
+    }
     Alert.alert('Stop searching?', 'Leave the matchmaking queue?', [
       { text: 'Stay', style: 'cancel' },
       {
@@ -71,6 +77,21 @@ export function MatchTopSection() {
   };
 
   const confirmCancel = (reason: string) => {
+    if (Platform.OS === 'web') {
+      if (!window.confirm('Cancel match? This permanently deletes all messages and cannot be undone.')) return;
+      setBusy(true);
+      cancelMatch(reason)
+        .then((result) => {
+          if (result.banned) {
+            window.alert('You have been banned from matching for 30 days due to too many cancellations.');
+          } else if (result.cancellationsThisMonth === 2) {
+            window.alert('Warning: one more cancellation this month will result in a 30-day ban.');
+          }
+        })
+        .catch((e: any) => window.alert(e?.message ?? 'Failed to cancel match.'))
+        .finally(() => setBusy(false));
+      return;
+    }
     Alert.alert(
       'Leave match?',
       'This permanently deletes all messages between you and cannot be undone.',
@@ -84,15 +105,9 @@ export function MatchTopSection() {
             try {
               const result = await cancelMatch(reason);
               if (result.banned) {
-                Alert.alert(
-                  'You have been banned',
-                  'You cancelled 3 matches this month. You cannot find new matches for 30 days.'
-                );
+                Alert.alert('You have been banned', 'You cancelled 3 matches this month. You cannot find new matches for 30 days.');
               } else if (result.cancellationsThisMonth === 2) {
-                Alert.alert(
-                  'Warning',
-                  'This is your 2nd cancellation this month. One more will result in a 30-day ban.'
-                );
+                Alert.alert('Warning', 'This is your 2nd cancellation this month. One more will result in a 30-day ban.');
               }
             } catch (e: any) {
               Alert.alert('Error', e?.message ?? 'Failed to leave match.');
