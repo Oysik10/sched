@@ -186,9 +186,17 @@ export function MatchTopSection() {
         <TouchableOpacity
           onPress={handleLeaveMatch}
           disabled={busy}
-          style={{ paddingTop: 6, alignItems: 'center' }}
+          style={{
+            marginTop: 8,
+            borderRadius: 10,
+            borderWidth: 1,
+            borderColor: '#3a1a1a',
+            backgroundColor: '#1f0f0f',
+            paddingVertical: 10,
+            alignItems: 'center',
+          }}
         >
-          <Text style={{ color: '#666', fontSize: 12 }}>Leave Match</Text>
+          <Text style={{ color: '#f87171', fontSize: 14, fontWeight: '700' }}>Cancel Match</Text>
         </TouchableOpacity>
       )}
     </View>
