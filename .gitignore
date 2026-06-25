@@ -40,3 +40,4 @@ app-example
 
 scripts/serviceAccountKey.json
 
+.vercel
