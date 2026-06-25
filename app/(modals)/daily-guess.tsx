@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView, Platform, BackHandler
 } from 'react-native';
 import { router, useNavigation } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firestore } from '../../src/firebaseConfig';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { todayKeyUTC } from '../../src/utils/day';
@@ -11,7 +12,8 @@ import { pickNDeterministic } from '../../src/utils/random';
 import { GUESS_QUESTION_POOL } from '../../src/constants/guessQuestions';
 
 export default function DailyGuessModal() {
-  const uid = auth.currentUser?.uid ?? '';
+  const [uid, setUid] = useState(auth.currentUser?.uid ?? '');
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? '')), []);
   const dayKey = todayKeyUTC();
   const question = pickNDeterministic(GUESS_QUESTION_POOL, 1, `guess:${dayKey}`)[0];
 

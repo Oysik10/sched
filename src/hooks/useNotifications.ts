@@ -7,16 +7,18 @@ import { router } from 'expo-router';
 import { doc, setDoc } from 'firebase/firestore';
 import { firestore } from '../firebaseConfig';
 
-// Foreground: always show banner + badge + sound
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+// Foreground: always show banner + badge + sound (native only)
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+}
 
 async function registerForPushNotifications(): Promise<string | null> {
   if (!Device.isDevice) return null; // simulators can't get tokens
@@ -78,7 +80,7 @@ export function useNotifications(uid: string) {
   const responseListenerRef = useRef<Notifications.EventSubscription | null>(null);
 
   useEffect(() => {
-    if (!uid) return;
+    if (!uid || Platform.OS === 'web') return;
 
     // Register and save push token
     registerForPushNotifications().then((token) => {
@@ -107,6 +109,7 @@ export async function scheduleLocalNotification(
   body: string,
   data?: Record<string, any>
 ): Promise<void> {
+  if (Platform.OS === 'web') return;
   try {
     await Notifications.scheduleNotificationAsync({
       content: { title, body, data: data ?? {}, sound: true },

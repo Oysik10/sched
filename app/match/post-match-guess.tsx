@@ -1,5 +1,5 @@
 // app/match/post-match-guess.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
   Platform,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firestore } from '../../src/firebaseConfig';
 import { doc, setDoc } from 'firebase/firestore';
 import { GUESS_QUESTION_POOL } from '../../src/constants/guessQuestions';
@@ -21,7 +22,8 @@ import { pickNDeterministic } from '../../src/utils/random';
 
 export default function PostMatchGuessScreen() {
   const { matchId, partnerUid } = useLocalSearchParams<{ matchId: string; partnerUid: string }>();
-  const uid = auth.currentUser?.uid ?? '';
+  const [uid, setUid] = useState(auth.currentUser?.uid ?? '');
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? '')), []);
 
   const questions = useMemo(
     () => pickNDeterministic(GUESS_QUESTION_POOL, 2, `postguess:${matchId}:${uid}`),

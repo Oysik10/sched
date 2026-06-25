@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "eslint .",
-    "dev": "next dev"
+    "dev": "expo start"
   },
   "dependencies": {
     "@expo/config-plugins": "~10.0.0",
@@ -26,12 +26,14 @@
     "expo-auth-session": "~6.2.0",
     "expo-blur": "~14.1.5",
     "expo-constants": "~17.1.6",
+    "expo-device": "~7.1.4",
     "expo-font": "~13.3.1",
     "expo-haptics": "~14.1.4",
     "expo-image": "~2.3.0",
     "expo-image-picker": "~16.1.4",
     "expo-linear-gradient": "~14.1.5",
     "expo-linking": "~7.1.5",
+    "expo-notifications": "~0.31.5",
     "expo-router": "~5.1.0",
     "expo-splash-screen": "~0.30.9",
     "expo-status-bar": "~2.2.3",
@@ -40,7 +42,6 @@
     "expo-web-browser": "~14.1.6",
     "firebase": "^11.9.1",
     "firebase-admin": "^13.4.0",
-    "next": "^15.4.6",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "react-native": "0.79.3",
@@ -53,14 +54,13 @@
     "react-native-tab-view": "^4.1.2",
     "react-native-web": "~0.20.0",
     "react-native-webview": "13.13.5",
-    "tslib": "^2.8.1",
-    "expo-notifications": "~0.31.5",
-    "expo-device": "~7.1.4"
+    "tslib": "^2.8.1"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@babel/preset-typescript": "^7.27.1",
     "@types/react": "~19.0.10",
+    "@types/react-native": "^0.72.8",
     "babel-preset-expo": "~13.0.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~9.2.0",

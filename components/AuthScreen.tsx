@@ -76,7 +76,7 @@ const AuthScreen = () => {
   const [password, setPassword] = useState('');
 
   const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: 'YOUR_CLIENT_ID.apps.googleusercontent.com',
+    clientId: '892513267453-frkm0qkpvbi5nitjgchb9mt4g8sq3hc0.apps.googleusercontent.com',
   });
 
   useEffect(() => {

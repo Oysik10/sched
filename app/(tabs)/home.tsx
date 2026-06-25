@@ -165,14 +165,17 @@ function QASwiper({ data, label }: { data: QAData; label: string }) {
 
 /* ---------------- Active-match Q&A section ---------------- */
 function MatchQASection() {
-  const { hasMatch, partnerUid, isExpired, loading } = usePersistentMatch();
+  const { hasMatch, inQueue, partnerUid, isExpired, loading } = usePersistentMatch();
+  const [uid, setUid] = useState(auth.currentUser?.uid ?? '');
   const [myQA, setMyQA] = useState<QAData>(null);
   const [partnerQA, setPartnerQA] = useState<QAData>(null);
   const [fetching, setFetching] = useState(false);
 
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? '')), []);
+
   useEffect(() => {
-    const uid = auth.currentUser?.uid ?? '';
-    if (!hasMatch || isExpired || !uid) { setMyQA(null); setPartnerQA(null); return; }
+    const active = !isExpired && (hasMatch || inQueue) && !!uid;
+    if (!active) { setMyQA(null); setPartnerQA(null); return; }
 
     let cancelled = false;
     setFetching(true);
@@ -191,9 +194,9 @@ function MatchQASection() {
       }
     })();
     return () => { cancelled = true; };
-  }, [hasMatch, isExpired, partnerUid]);
+  }, [hasMatch, inQueue, isExpired, partnerUid, uid]);
 
-  if (loading || !hasMatch || isExpired) return null;
+  if (loading || !uid || isExpired || (!hasMatch && !inQueue)) return null;
   if (fetching) {
     return (
       <View style={styles.fetchingRow}>
@@ -205,7 +208,7 @@ function MatchQASection() {
   return (
     <View style={{ paddingHorizontal: 12, paddingTop: 4 }}>
       <QASwiper data={myQA} label="Your answers" />
-      <QASwiper data={partnerQA} label="Match's answers" />
+      {hasMatch && <QASwiper data={partnerQA} label="Match's answers" />}
     </View>
   );
 }
@@ -230,7 +233,8 @@ function isMatchOver(m: LastMatch): boolean {
 }
 
 function PostMatchSection() {
-  const uid = auth.currentUser?.uid ?? '';
+  const [uid, setUid] = useState(auth.currentUser?.uid ?? '');
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? '')), []);
   const [lastMatch, setLastMatch] = useState<LastMatch | null>(null);
   const [myGuess, setMyGuess] = useState<PostGuess | null>(null);
   const [partnerGuess, setPartnerGuess] = useState<PostGuess | null>(null);

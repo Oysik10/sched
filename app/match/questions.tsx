@@ -1,6 +1,7 @@
 // app/match/questions.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, SafeAreaView, Alert, TextInput, ScrollView } from 'react-native';
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firestore } from '../../src/firebaseConfig';
 import {
   doc, getDoc, setDoc, collection, getDocs, query, where, Timestamp
@@ -109,7 +110,8 @@ function pickNDeterministic<T>(arr: T[], n: number, seedStr: string): T[] {
 }
 
 export default function MatchQuestionsScreen() {
-  const uid = auth.currentUser?.uid ?? null;
+  const [uid, setUid] = useState<string | null>(auth.currentUser?.uid ?? null);
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? null)), []);
 
   const [loading, setLoading] = useState(true);
   const [meDone, setMeDone] = useState<boolean>(false);

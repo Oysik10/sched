@@ -9,18 +9,12 @@
     },
     "incremental": true,
     "isolatedModules": true,
-    "jsx": "preserve",
-    "plugins": [
-      {
-        "name": "next"
-      }
-    ]
+    "jsx": "preserve"
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
-    "expo-env.d.ts",
-    ".next/types/**/*.ts"
+    "expo-env.d.ts"
   ]
 }

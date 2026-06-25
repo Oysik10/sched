@@ -1,5 +1,5 @@
 // app/match/pre-queue-questions.tsx
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
   Platform,
 } from 'react-native';
 import { router } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firestore } from '../../src/firebaseConfig';
 import { doc, setDoc } from 'firebase/firestore';
 import { usePersistentMatch } from '../../src/hooks/usePersistentMatch';
@@ -68,7 +69,11 @@ function pickRandom<T>(arr: T[], n: number): T[] {
 }
 
 export default function PreQueueQuestionsScreen() {
-  const uid = auth.currentUser?.uid ?? '';
+  // auth.currentUser is null on web until Firebase restores the session asynchronously,
+  // so we subscribe reactively instead of reading it once at render time.
+  const [uid, setUid] = useState(auth.currentUser?.uid ?? '');
+  useEffect(() => onAuthStateChanged(auth, (u) => setUid(u?.uid ?? '')), []);
+
   const { joinQueue } = usePersistentMatch();
 
   const [questions] = useState<string[]>(() => pickRandom(QUESTION_POOL, 3));
@@ -112,22 +117,16 @@ export default function PreQueueQuestionsScreen() {
             answers: questions.map((_, i) => (answers[i] ?? '').trim()),
             savedAt: Date.now(),
           },
+          pendingMatch: true,
         },
         { merge: true }
       );
-
-      const result = await joinQueue();
-      if (result.status === 'matched') {
-        Alert.alert("You're matched!", "Your 3-day anonymous chat has started. Tap Open on the home screen to chat.");
-      } else if (result.status === 'queued') {
-        Alert.alert('In queue', "We're looking for your match — you'll be notified when paired.");
-      } else if (result.status === 'already_matched') {
-        Alert.alert('Already matched', 'You already have an active match!');
-      }
+      // Navigate back immediately — pendingMatch flag locks the button on home.
+      // The hook auto-retries joinQueue when it sees pendingMatch: true.
       router.back();
+      joinQueue().catch(() => {});
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to join queue.');
-    } finally {
+      Alert.alert('Error', e?.message ?? 'Failed to save your answers.');
       setSaving(false);
     }
   };

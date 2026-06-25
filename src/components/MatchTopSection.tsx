@@ -29,8 +29,8 @@ function formatExpiry(ts: Timestamp): string {
 
 export function MatchTopSection() {
   const {
-    loading, inQueue, hasMatch, partnerUid, expiresAt, isExpired,
-    leaveQueue, cancelMatch,
+    loading, inQueue, pendingMatch, hasMatch, partnerUid, expiresAt, isExpired,
+    cancelMatch, cancelPending,
   } = usePersistentMatch();
   const [uid, setUid] = useState('');
   const [busy, setBusy] = useState(false);
@@ -40,19 +40,21 @@ export function MatchTopSection() {
     return unsub;
   }, []);
 
+  const isSearching = pendingMatch || inQueue;
+
   const handleJoin = () => {
     router.push('/match/pre-queue-questions' as any);
   };
 
-  const handleLeaveQueue = () => {
-    Alert.alert('Leave queue?', 'You will be removed from the matchmaking queue.', [
+  const handleCancelSearch = () => {
+    Alert.alert('Stop searching?', 'Leave the matchmaking queue?', [
       { text: 'Stay', style: 'cancel' },
       {
         text: 'Leave',
         style: 'destructive',
         onPress: async () => {
           setBusy(true);
-          try { await leaveQueue(); } catch {}
+          try { await cancelPending(); } catch {}
           setBusy(false);
         },
       },
@@ -68,7 +70,6 @@ export function MatchTopSection() {
     router.push(`/dm/${partnerUid}`);
   };
 
-  // Step 2: confirm + execute cancellation once reason is chosen
   const confirmCancel = (reason: string) => {
     Alert.alert(
       'Leave match?',
@@ -104,7 +105,6 @@ export function MatchTopSection() {
     );
   };
 
-  // Step 1: pick a reason
   const handleLeaveMatch = () => {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
@@ -133,7 +133,7 @@ export function MatchTopSection() {
     if (loading) return 'Checking status…';
     if (isExpired) return 'Your 3-day match has ended';
     if (hasMatch) return expiresAt ? formatExpiry(expiresAt) : 'Tap to open chat';
-    if (inQueue) return 'Looking for your match…';
+    if (isSearching) return 'Finding your match…';
     return 'Tap to find a 3-day anonymous match';
   };
 
@@ -141,14 +141,14 @@ export function MatchTopSection() {
     if (loading || busy) return '…';
     if (isExpired) return 'Ended';
     if (hasMatch) return 'Open';
-    if (inQueue) return 'Cancel';
+    if (isSearching) return 'Cancel';
     return 'Find Match';
   };
 
   const onPress = () => {
     if (loading || busy || isExpired) return;
     if (hasMatch) { handleOpenChat(); return; }
-    if (inQueue) { handleLeaveQueue(); return; }
+    if (isSearching) { handleCancelSearch(); return; }
     handleJoin();
   };
 

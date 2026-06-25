@@ -1,7 +1,7 @@
 // src/theme/ThemeProvider.tsx
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { Appearance, ColorSchemeName } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { storage } from '../utils/storage';
 
 type Mode = 'light' | 'dark' | 'system';
 
@@ -60,7 +60,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Load persisted mode
   useEffect(() => {
     (async () => {
-      const saved = await AsyncStorage.getItem(KEY);
+      const saved = await storage.getItem(KEY);
       if (saved === 'light' || saved === 'dark' || saved === 'system') {
         setModeState(saved);
       }
@@ -69,7 +69,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const setMode = async (m: Mode) => {
     setModeState(m);
-    await AsyncStorage.setItem(KEY, m);
+    await storage.setItem(KEY, m);
   };
 
   const isDark = mode === 'dark' || (mode === 'system' && system === 'dark');

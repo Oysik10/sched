@@ -1,11 +1,14 @@
 import { initializeApp } from 'firebase/app';
-import { initializeAuth } from 'firebase/auth';
-// @ts-ignore – getReactNativePersistence exists in the RN bundle but is missing from the firebase package wrapper types
-import { getReactNativePersistence } from 'firebase/auth';
+import { initializeAuth, browserLocalPersistence, Persistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
-
+import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// getReactNativePersistence is absent from firebase/auth TS types but present in the RN bundle
+const { getReactNativePersistence } = require('firebase/auth') as {
+  getReactNativePersistence: (storage: typeof AsyncStorage) => Persistence;
+};
 
 const firebaseConfig = {
   apiKey: "AIzaSyA5Ih6TQ6cVavLwG4DOMVBIpnSUOFIZPLE",
@@ -19,7 +22,9 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = initializeAuth(app, {
- persistence: getReactNativePersistence(AsyncStorage),
+  persistence: Platform.OS === 'web'
+    ? browserLocalPersistence
+    : getReactNativePersistence(AsyncStorage),
 });
 const firestore = getFirestore(app);
 const functions = getFunctions(app, 'us-central1');
