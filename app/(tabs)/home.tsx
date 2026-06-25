@@ -345,7 +345,7 @@ function PostMatchSection() {
       {/* Section header */}
       <Text style={styles.postTitle}>Post-Match</Text>
       <Text style={styles.postSubtitle}>
-        {lastMatch.active === false ? 'Match was cancelled' : 'Your 3-day match has ended'}
+        {lastMatch.active === false ? 'Match was cancelled' : 'Your match has ended'}
       </Text>
 
       {/* Your guess CTA */}

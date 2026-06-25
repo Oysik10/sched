@@ -132,7 +132,7 @@ export function usePersistentMatch(): PersistentMatchState {
     if (!matchLoading && hasMatch && !prevHasMatchRef.current) {
       scheduleLocalNotification(
         "You've been matched! 🔗",
-        "Your 3-day anonymous chat has started. Tap to open.",
+        "Your anonymous chat has started. Tap to open.",
         { type: 'match_found' }
       );
       if (uid) {
@@ -148,7 +148,7 @@ export function usePersistentMatch(): PersistentMatchState {
     if (isExpired && !prevIsExpiredRef.current) {
       scheduleLocalNotification(
         'Your match has ended ⏰',
-        'Your 3-day anonymous chat has expired. Answer the post-match questions!',
+        'Your anonymous chat has expired. Answer the post-match questions!',
         { type: 'match_expired' }
       );
       if (uid) {

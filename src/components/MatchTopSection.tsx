@@ -131,10 +131,10 @@ export function MatchTopSection() {
 
   const subtitle = () => {
     if (loading) return 'Checking status…';
-    if (isExpired) return 'Your 3-day match has ended';
+    if (isExpired) return 'Your match has ended';
     if (hasMatch) return expiresAt ? formatExpiry(expiresAt) : 'Tap to open chat';
     if (isSearching) return 'Finding your match…';
-    return 'Tap to find a 3-day anonymous match';
+    return 'Tap to find an anonymous match';
   };
 
   const ctaLabel = () => {

@@ -65,7 +65,6 @@ export default function SettingsHome() {
       <Section title="Notifications">
         <Row
           label="Enable Notifications"
-          sub="(Not implemented yet)"
           right={<Switch value={notifEnabled} onValueChange={toggleNotifications} disabled={savingNotif} />}
         />
       </Section>
