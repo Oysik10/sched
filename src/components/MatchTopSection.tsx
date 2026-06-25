@@ -117,6 +117,9 @@ export function MatchTopSection() {
           if (index < CANCEL_REASONS.length) confirmCancel(CANCEL_REASONS[index]);
         }
       );
+    } else if (Platform.OS === 'web') {
+      // Multi-button Alert doesn't work in browsers — skip the reason picker
+      confirmCancel('Other');
     } else {
       Alert.alert(
         'Why are you leaving?',
