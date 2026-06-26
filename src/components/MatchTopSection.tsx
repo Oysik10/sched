@@ -19,12 +19,16 @@ const CANCEL_REASONS = [
 function formatExpiry(ts: Timestamp): string {
   const msLeft = ts.toMillis() - Date.now();
   if (msLeft <= 0) return 'Expired';
-  const totalHours = Math.floor(msLeft / 3_600_000);
+  const totalSecs = Math.floor(msLeft / 1000);
+  const mins = Math.floor(totalSecs / 60);
+  const secs = totalSecs % 60;
+  if (mins < 60) return `${mins}m ${secs}s left`;
+  const totalHours = Math.floor(mins / 60);
+  const remMins = mins % 60;
   const days = Math.floor(totalHours / 24);
   const hours = totalHours % 24;
   if (days > 0) return `${days}d ${hours}h left`;
-  const mins = Math.floor((msLeft % 3_600_000) / 60_000);
-  return `${totalHours}h ${mins}m left`;
+  return `${totalHours}h ${remMins}m left`;
 }
 
 export function MatchTopSection() {
@@ -34,11 +38,19 @@ export function MatchTopSection() {
   } = usePersistentMatch();
   const [uid, setUid] = useState('');
   const [busy, setBusy] = useState(false);
+  const [, setTick] = useState(0);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => setUid(u?.uid ?? ''));
     return unsub;
   }, []);
+
+  // Tick every second while a match is active so the countdown updates live
+  useEffect(() => {
+    if (!hasMatch || !expiresAt || isExpired) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [hasMatch, expiresAt, isExpired]);
 
   const isSearching = pendingMatch || inQueue;
 

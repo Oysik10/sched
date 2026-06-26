@@ -100,8 +100,8 @@ export default function DMScreen() {
   // anonymous-match username hiding
   const [hideUsernameForOther, setHideUsernameForOther] = useState(false);
 
-  // 3-day match expiry
   const [matchExpired, setMatchExpired] = useState(false);
+  const [matchCancelled, setMatchCancelled] = useState(false);
   const [matchExpiresAt, setMatchExpiresAt] = useState<Timestamp | null>(null);
 
   const getDisplayName = (u: string) => {
@@ -632,13 +632,16 @@ export default function DMScreen() {
     return onSnapshot(matchRef, (snap) => {
       if (!snap.exists()) {
         setMatchExpired(false);
+        setMatchCancelled(false);
         setMatchExpiresAt(null);
         return;
       }
       const data = snap.data();
       const exp: Timestamp | null = data.expiresAt ?? null;
+      const cancelled = data.active === false && !!data.cancelledBy;
       const expired = data.active === false || (exp !== null && exp.toMillis() <= Date.now());
       setMatchExpired(expired);
+      setMatchCancelled(cancelled);
       setMatchExpiresAt(exp);
       // Schedule a local flip if the match expires while the screen is open
       if (!expired && exp) {
@@ -919,11 +922,17 @@ export default function DMScreen() {
             </View>
           )}
 
-          {/* Expired match banner replaces composer */}
+          {/* Expired/cancelled match banner replaces composer */}
           {matchExpired ? (
             <View style={styles.expiredBanner}>
-              <Text style={styles.expiredTitle}>This match has ended</Text>
-              <Text style={styles.expiredSub}>The 3-day window is over. You can still read the conversation.</Text>
+              <Text style={styles.expiredTitle}>
+                {matchCancelled ? 'Match was cancelled' : 'Time is up'}
+              </Text>
+              <Text style={styles.expiredSub}>
+                {matchCancelled
+                  ? 'This match was ended early. You can still read the conversation.'
+                  : 'Your 10-minute chat has ended. You can still read the conversation.'}
+              </Text>
             </View>
           ) : null}
 

@@ -126,10 +126,15 @@ export function usePersistentMatch(): PersistentMatchState {
     return unsub;
   }, [uid]);
 
-  // Notification + clear pendingMatch when match is found
+  // Track whether the current user initiated a cancel (so we don't self-notify)
+  const selfCancelledRef = useRef(false);
+
+  // Notification + clear pendingMatch when match found, or notify partner when cancelled
   const prevHasMatchRef = useRef(false);
   useEffect(() => {
-    if (!matchLoading && hasMatch && !prevHasMatchRef.current) {
+    if (matchLoading) return;
+    if (hasMatch && !prevHasMatchRef.current) {
+      // Match just found
       scheduleLocalNotification(
         "You've been matched! 🔗",
         "Your anonymous chat has started. Tap to open.",
@@ -138,9 +143,17 @@ export function usePersistentMatch(): PersistentMatchState {
       if (uid) {
         setDoc(doc(firestore, 'users', uid), { pendingMatch: false }, { merge: true }).catch(() => {});
       }
+    } else if (!hasMatch && prevHasMatchRef.current && !isExpired && !selfCancelledRef.current) {
+      // Match disappeared but didn't expire and we didn't cancel it — partner cancelled
+      scheduleLocalNotification(
+        'Match cancelled',
+        'Your anonymous match was ended by your match.',
+        { type: 'match_cancelled' }
+      );
     }
+    selfCancelledRef.current = false;
     prevHasMatchRef.current = hasMatch;
-  }, [hasMatch, matchLoading, uid]);
+  }, [hasMatch, matchLoading, isExpired, uid]);
 
   // Notification + clear pendingMatch when match expires
   const prevIsExpiredRef = useRef(false);
@@ -201,6 +214,7 @@ export function usePersistentMatch(): PersistentMatchState {
 
   const cancelMatch = useCallback(async (reason: string): Promise<CancelResult> => {
     if (!matchId) throw new Error('No active match to cancel');
+    selfCancelledRef.current = true;
     const fn = httpsCallable<object, CancelResult>(functions, 'cancelMatch');
     const result = await fn({ matchId, reason });
     setHasMatch(false);
