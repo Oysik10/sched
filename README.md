@@ -1,13 +1,13 @@
 # Sched
 
-An anonymous matching and chat app. It pairs two people anonymously and gives them a three-day window to actually talk — then identities are revealed and a set of questions opens up. The idea was to strip out the usual profile-first dynamic and see what happens when the conversation comes first. Runs on iOS and on the web from a single codebase.
+An anonymous matching and chat app. It pairs two people anonymously and gives them a ten minute window to actually talk — then identities are revealed and a set of questions opens up. The idea was to strip out the usual profile-first dynamic and see what happens when the conversation comes first. Runs on iOS and on the web from a single codebase.
 
 **[Live demo →](https://sched-eight.vercel.app)**
 
 ## What it does
 
 - **Anonymous pairing** — you're matched with someone, no profile, no photo
-- **Three-day window** — you've got 72 hours to talk before the reveal
+- **Ten Minute window** — you've got 72 hours to talk before the reveal
 - **The reveal** — identities open up and a set of questions unlocks
 - **Real-time messaging** — DMs that stay in sync as you chat
 - **Social layer** — followers, friend requests, blocking
@@ -17,7 +17,7 @@ An anonymous matching and chat app. It pairs two people anonymously and gives th
 
 ## The interesting parts
 
-The three things I spent the most time on: keeping messages in sync in real time, managing the three-day session as state (trickier than it sounds once you account for reconnects and the reveal transition), and the matching logic underneath it all.
+The three things I spent the most time on: keeping messages in sync in real time, managing the ten minute session as state (trickier than it sounds once you account for reconnects and the reveal transition), and the matching logic underneath it all.
 
 ## Built with
 
