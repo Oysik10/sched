@@ -9,6 +9,7 @@ import * as Google from 'expo-auth-session/providers/google';
 import {
   signInWithEmailAndPassword,
   signInWithCredential,
+  signInWithPopup,
   GoogleAuthProvider,
 } from 'firebase/auth';
 import { auth } from '../src/firebaseConfig';
@@ -75,7 +76,7 @@ const AuthScreen = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const [request, response, promptAsync] = Google.useAuthRequest({
+  const [, response, promptAsync] = Google.useAuthRequest({
     clientId: '892513267453-frkm0qkpvbi5nitjgchb9mt4g8sq3hc0.apps.googleusercontent.com',
   });
 
@@ -85,11 +86,19 @@ const AuthScreen = () => {
       const credential = GoogleAuthProvider.credential(id_token);
       signInWithCredential(auth, credential)
         .then(() => postSignInRoute())
-        .catch((e) => {
-          Alert.alert('Google Sign-in failed', e.message);
-        });
+        .catch((e) => Alert.alert('Google Sign-in failed', e.message));
     }
   }, [response]);
+
+  const handleGoogleSignIn = () => {
+    if (Platform.OS === 'web') {
+      signInWithPopup(auth, new GoogleAuthProvider())
+        .then(() => postSignInRoute())
+        .catch((e) => window.alert('Google Sign-in failed: ' + e.message));
+    } else {
+      promptAsync();
+    }
+  };
 
   const postSignInRoute = async () => {
     try {
@@ -174,8 +183,7 @@ const AuthScreen = () => {
 
         <TouchableOpacity
           style={[styles.button, styles.googleButton]}
-          onPress={() => promptAsync()}
-          disabled={!request}
+          onPress={handleGoogleSignIn}
         >
           <Image
             source={{
