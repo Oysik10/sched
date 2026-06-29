@@ -1,50 +1,62 @@
-# Welcome to your Expo app 👋
+# Sched
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+An anonymous matching and chat app. It pairs two people anonymously and gives them a three-day window to actually talk — then identities are revealed and a set of questions opens up. The idea was to strip out the usual profile-first dynamic and see what happens when the conversation comes first. Runs on iOS and on the web from a single codebase.
 
-## Get started
+**[Live demo →](https://sched-eight.vercel.app)**
 
-1. Install dependencies
+## What it does
 
-   ```bash
-   npm install
-   ```
+- **Anonymous pairing** — you're matched with someone, no profile, no photo
+- **Three-day window** — you've got 72 hours to talk before the reveal
+- **The reveal** — identities open up and a set of questions unlocks
+- **Real-time messaging** — DMs that stay in sync as you chat
+- **Social layer** — followers, friend requests, blocking
+- **Streaks & profiles** — daily streaks and an editable account
+- **Push notifications**
+- **Moderation** — a reporting flow plus an admin screen, backed by a Cloud Function
 
-2. Start the app
+## The interesting parts
 
-   ```bash
-   npx expo start
-   ```
+The three things I spent the most time on: keeping messages in sync in real time, managing the three-day session as state (trickier than it sounds once you account for reconnects and the reveal transition), and the matching logic underneath it all.
 
-In the output, you'll find options to open the app in a
+## Built with
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+React Native · TypeScript · Expo · Firebase (Auth, Firestore, Cloud Functions, Storage)
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+One codebase ships to iOS, Android, and the web via Expo Router and Expo for Web.
 
-## Get a fresh project
+## Running it locally
 
-When you're ready, run:
+You'll need Node 18+, a Firebase project, and either Expo Go on your phone or a simulator.
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+Then open it wherever you like:
 
-## Learn more
+```bash
+npm run ios      # iOS
+npm run android  # Android
+npm run web      # web
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+Firebase config lives in `src/firebaseConfig.ts`. Cloud Functions, Firestore rules, and Storage rules deploy with the Firebase CLI:
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+firebase deploy --only functions
+firebase deploy --only firestore:rules,storage
+```
 
-## Join the community
+## Layout
 
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```
+app/         Screens (tabs, the match flow, DMs, profile, admin)
+components/  Shared UI
+src/
+  hooks/     Match, notification, and daily-question hooks
+  utils/     Moderation, notifications, storage, translation
+  theme/     Theming
+functions/   Cloud Functions (moderation)
+```
