@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { initializeAuth, browserLocalPersistence, browserPopupRedirectResolver, Persistence } from 'firebase/auth';
+import { initializeAuth, browserLocalPersistence, Persistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { Platform } from 'react-native';
@@ -25,7 +25,6 @@ const auth = initializeAuth(app, {
   persistence: Platform.OS === 'web'
     ? browserLocalPersistence
     : getReactNativePersistence(AsyncStorage),
-  popupRedirectResolver: Platform.OS === 'web' ? browserPopupRedirectResolver : undefined,
 });
 const firestore = getFirestore(app);
 const functions = getFunctions(app, 'us-central1');

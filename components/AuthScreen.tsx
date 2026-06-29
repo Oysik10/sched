@@ -90,11 +90,15 @@ const AuthScreen = () => {
     }
   }, [response]);
 
-  const handleGoogleSignIn = () => {
+  const handleGoogleSignIn = async () => {
     if (Platform.OS === 'web') {
-      signInWithPopup(auth, new GoogleAuthProvider())
-        .then(() => postSignInRoute())
-        .catch((e) => window.alert('Google Sign-in failed: ' + e.message));
+      try {
+        const { browserPopupRedirectResolver } = await import('firebase/auth');
+        await signInWithPopup(auth, new GoogleAuthProvider(), browserPopupRedirectResolver);
+        await postSignInRoute();
+      } catch (e: any) {
+        window.alert('Google Sign-in failed: ' + e.message);
+      }
     } else {
       promptAsync();
     }
