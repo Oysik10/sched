@@ -256,17 +256,17 @@ const AccountInformation = () => {
     }
   };
 
-  const promptDeleteWithPassword = () => {
-    if (!user) {
-      Alert.alert('Session expired', 'Please sign in again.');
+  const promptDeleteWithPassword = async () => {
+    const current = auth.currentUser;
+    if (!current) {
+      if (Platform.OS === 'web') window.alert('Session expired. Please sign in again.');
+      else Alert.alert('Session expired', 'Please sign in again.');
       router.replace('/');
       return;
     }
-    if (!user.email) {
-      Alert.alert(
-        'Unsupported for this account',
-        'This account does not have an email/password sign-in method.'
-      );
+    if (!current.email) {
+      if (Platform.OS === 'web') window.alert('This account does not have an email/password sign-in method.');
+      else Alert.alert('Unsupported for this account', 'This account does not have an email/password sign-in method.');
       return;
     }
 
@@ -280,24 +280,36 @@ const AccountInformation = () => {
         },
         'secure-text'
       );
+    } else if (Platform.OS === 'web') {
+      if (!window.confirm('Delete your account? This cannot be undone and will permanently delete all your data.')) return;
+      const password = window.prompt('Enter your password to confirm:');
+      if (!password) return;
+      await actuallyDeleteAccount(password);
     } else {
       Alert.alert(
         'Delete Account',
-        'Password re-authentication is required. Please go to Settings > Security to re-authenticate, then try again.',
-        [{ text: 'OK' }]
+        'Are you sure? This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Delete', style: 'destructive', onPress: () => {
+            Alert.prompt?.(
+              'Enter Password',
+              'Enter your current password to confirm.',
+              async (pw) => { if (pw) await actuallyDeleteAccount(pw); },
+              'secure-text'
+            );
+          }},
+        ]
       );
     }
   };
 
   const actuallyDeleteAccount = async (password: string) => {
     const current = auth.currentUser;
-    if (!current) {
-      Alert.alert('Session expired', 'Please sign in again.');
+    if (!current?.email) {
+      if (Platform.OS === 'web') window.alert('Session expired. Please sign in again.');
+      else Alert.alert('Session expired', 'Please sign in again.');
       router.replace('/');
-      return;
-    }
-    if (!current.email) {
-      Alert.alert('Unsupported', 'This account has no email/password sign-in.');
       return;
     }
 
@@ -307,10 +319,12 @@ const AccountInformation = () => {
       await reauthenticateWithCredential(current, cred);
       await deleteDoc(doc(db, 'users', current.uid));
       await deleteUser(current);
-      Alert.alert('Deleted', 'Your account has been deleted.');
+      if (Platform.OS === 'web') window.alert('Your account has been deleted.');
+      else Alert.alert('Deleted', 'Your account has been deleted.');
       router.replace('../..');
     } catch (error: any) {
-      Alert.alert('Error', error?.message || 'Could not delete account.');
+      if (Platform.OS === 'web') window.alert(error?.message || 'Could not delete account.');
+      else Alert.alert('Error', error?.message || 'Could not delete account.');
     } finally {
       setLoading(false);
     }
