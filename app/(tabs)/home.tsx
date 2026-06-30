@@ -242,7 +242,7 @@ function PostMatchSection() {
   const [savingVerdict, setSavingVerdict] = useState(false);
   const [loadingData, setLoadingData] = useState(true);
 
-  // Subscribe to most recent match
+  // Subscribe to most recent match — also reads guesses directly from match doc
   useEffect(() => {
     if (!uid) { setLoadingData(false); return; }
 
@@ -256,15 +256,32 @@ function PostMatchSection() {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        if (snap.empty) { setLastMatch(null); setLoadingData(false); return; }
+        if (snap.empty) {
+          setLastMatch(null);
+          setMyGuess(null);
+          setPartnerGuess(null);
+          setLoadingData(false);
+          return;
+        }
         const d = snap.docs[0];
         const data = d.data();
+        const matchId = d.id;
+        const partnerUid = ((data.participants as string[]) || []).find((p) => p !== uid) ?? '';
+
         setLastMatch({
-          matchId: d.id,
-          partnerUid: ((data.participants as string[]) || []).find((p) => p !== uid) ?? '',
+          matchId,
+          partnerUid,
           active: data.active === true,
           expiresAtMs: (data.expiresAt as Timestamp)?.toMillis?.() ?? 0,
         });
+
+        // Read guesses from match doc — both users can read since they're participants
+        const guesses = data.guesses ?? {};
+        const myG = guesses[uid] ?? null;
+        const pG = partnerUid ? (guesses[partnerUid] ?? null) : null;
+        setMyGuess(myG ? { matchId, ...myG } : null);
+        setPartnerGuess(pG ? { matchId, ...pG } : null);
+
         setLoadingData(false);
       },
       () => setLoadingData(false)
@@ -272,45 +289,24 @@ function PostMatchSection() {
     return unsub;
   }, [uid]);
 
-  // Fetch my post-match guess and partner's guess when last match is over
+  // Load saved verdicts from user doc when match changes
   useEffect(() => {
     if (!lastMatch || !isMatchOver(lastMatch) || !uid) {
-      setMyGuess(null);
-      setPartnerGuess(null);
       setVerdicts({});
       return;
     }
-
     let cancelled = false;
     (async () => {
       try {
-        const fetches: Promise<any>[] = [
-          getDoc(doc(firestore, 'users', uid)),
-          lastMatch.partnerUid
-            ? getDoc(doc(firestore, 'users', lastMatch.partnerUid))
-            : Promise.resolve(null),
-        ];
-        const [mySnap, partnerSnap] = await Promise.all(fetches);
+        const mySnap = await getDoc(doc(firestore, 'users', uid));
         if (cancelled) return;
-
-        const myData = mySnap.exists() ? mySnap.data() : {};
-        const myG = myData.postMatchGuess ?? null;
-        setMyGuess(myG?.matchId === lastMatch.matchId ? myG : null);
-
-        const partnerData = partnerSnap?.exists() ? partnerSnap.data() : {};
-        const pG = partnerData?.postMatchGuess ?? null;
-        setPartnerGuess(pG?.matchId === lastMatch.matchId ? pG : null);
-
-        // Load saved verdicts
-        const savedV = myData.postMatchVerdicts ?? null;
+        const savedV = mySnap.data()?.postMatchVerdicts ?? null;
         if (savedV?.matchId === lastMatch.matchId && savedV.verdicts) {
           setVerdicts(savedV.verdicts as Record<number, boolean>);
         } else {
           setVerdicts({});
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     })();
     return () => { cancelled = true; };
   }, [lastMatch, uid]);

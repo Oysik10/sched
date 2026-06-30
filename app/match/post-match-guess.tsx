@@ -16,7 +16,7 @@ import {
 import { router, useLocalSearchParams } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, firestore } from '../../src/firebaseConfig';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { GUESS_QUESTION_POOL } from '../../src/constants/guessQuestions';
 import { pickNDeterministic } from '../../src/utils/random';
 
@@ -33,6 +33,29 @@ export default function PostMatchGuessScreen() {
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState(true);
+  const [submitted, setSubmitted] = useState(false);
+  const [submittedAnswers, setSubmittedAnswers] = useState<string[]>([]);
+  const [submittedQuestions, setSubmittedQuestions] = useState<string[]>([]);
+
+  // Check on load if already submitted
+  useEffect(() => {
+    if (!uid || !matchId) return;
+    (async () => {
+      try {
+        const matchSnap = await getDoc(doc(firestore, 'matches', matchId));
+        if (matchSnap.exists()) {
+          const existing = matchSnap.data()?.guesses?.[uid];
+          if (existing) {
+            setSubmittedAnswers(existing.answers ?? []);
+            setSubmittedQuestions(existing.questions ?? []);
+            setSubmitted(true);
+          }
+        }
+      } catch {}
+      setChecking(false);
+    })();
+  }, [uid, matchId]);
 
   const currentAnswer = answers[step]?.trim() ?? '';
   const allAnswered = questions.every((_, i) => (answers[i]?.trim().length ?? 0) > 0);
@@ -50,25 +73,71 @@ export default function PostMatchGuessScreen() {
   const handleSubmit = async () => {
     if (!allAnswered || !uid || !matchId) return;
     setSaving(true);
+    const finalAnswers = questions.map((_, i) => (answers[i] ?? '').trim());
+    const payload = {
+      questions,
+      answers: finalAnswers,
+      completedAt: Date.now(),
+    };
     try {
-      await setDoc(
-        doc(firestore, 'users', uid),
-        {
-          postMatchGuess: {
-            matchId,
-            questions,
-            answers: questions.map((_, i) => (answers[i] ?? '').trim()),
-            completedAt: Date.now(),
-          },
-        },
-        { merge: true }
-      );
-      router.back();
+      await Promise.all([
+        // Save to user doc (for backward compat)
+        setDoc(
+          doc(firestore, 'users', uid),
+          { postMatchGuess: { matchId, ...payload } },
+          { merge: true }
+        ),
+        // Save to match doc so partner can read it
+        setDoc(
+          doc(firestore, 'matches', matchId),
+          { guesses: { [uid]: payload } },
+          { merge: true }
+        ),
+      ]);
+      setSubmittedAnswers(finalAnswers);
+      setSubmittedQuestions(questions);
+      setSubmitted(true);
     } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'Failed to save your answers.');
+      if (Platform.OS === 'web') window.alert(e?.message ?? 'Failed to save your answers.');
+      else Alert.alert('Error', e?.message ?? 'Failed to save your answers.');
       setSaving(false);
     }
   };
+
+  if (checking) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <ActivityIndicator color="#CFAF45" style={{ flex: 1 }} />
+      </SafeAreaView>
+    );
+  }
+
+  if (submitted) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+            <Text style={styles.backText}>← Back</Text>
+          </TouchableOpacity>
+        </View>
+        <ScrollView contentContainerStyle={styles.content}>
+          <Text style={styles.title}>Guesses submitted ✓</Text>
+          <Text style={styles.subtitle}>
+            You've already answered these. Your match can see your guesses.
+          </Text>
+          {submittedQuestions.map((q, i) => (
+            <View key={i} style={styles.card}>
+              <Text style={styles.qNum}>Question {i + 1}</Text>
+              <Text style={styles.qText}>{q}</Text>
+              <View style={styles.submittedAnswer}>
+                <Text style={styles.submittedAnswerText}>{submittedAnswers[i]}</Text>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -216,6 +285,14 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
     lineHeight: 22,
   },
+  submittedAnswer: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#2e2e2e',
+    padding: 12,
+  },
+  submittedAnswerText: { color: '#ccc', fontSize: 15, lineHeight: 22 },
 
   btn: {
     backgroundColor: '#CFAF45',
