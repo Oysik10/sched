@@ -7,7 +7,7 @@ An anonymous matching and chat app. It pairs two people anonymously and gives th
 ## What it does
 
 - **Anonymous pairing** — you're matched with someone, no profile, no photo
-- **Ten Minute window** — you've got 72 hours to talk before the reveal
+- **Ten Minute window** — you've got ten minutes to talk before the reveal
 - **The reveal** — identities open up and a set of questions unlocks
 - **Real-time messaging** — DMs that stay in sync as you chat
 - **Social layer** — followers, friend requests, blocking
